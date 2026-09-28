@@ -1,8 +1,16 @@
 package dza.folbol.BLABONGO;
 
 import android.annotation.SuppressLint;
+import android.app.PendingIntent;
 import android.app.PictureInPictureParams;
+import android.app.RemoteAction;
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.pm.PackageManager;
+import android.graphics.Rect;
+import android.graphics.drawable.Icon;
 import android.content.pm.ActivityInfo;
 import android.content.res.Configuration;
 import android.net.ConnectivityManager;
@@ -29,6 +37,7 @@ import android.webkit.SslErrorHandler;
 import android.webkit.CookieManager;
 import android.widget.ImageButton;
 import android.widget.ScrollView;
+import android.widget.Toast;
 import android.widget.SeekBar;
 import android.widget.TextView;
 
@@ -106,6 +115,14 @@ public class PlayerActivity extends AppCompatActivity {
 
     // --- PIP ---
     private boolean isInPipMode = false;
+    private boolean entrandoEnPip = false;   // true entre enterPictureInPictureMode() y onPictureInPictureModeChanged()
+    private boolean cerrandoDesdePip = false;
+    private BroadcastReceiver pipReceiver;
+
+    private static final String ACTION_PIP_CONTROL = "dza.folbol.BLABONGO.PIP_CONTROL";
+    private static final String EXTRA_PIP_ACTION = "pip_action";
+    private static final int PIP_ACTION_PLAY_PAUSE = 1;
+    private static final int PIP_ACTION_CLOSE = 2;
 
     // Auto-ocultar controles
     private static final long CONTROLS_TIMEOUT = 4000; // 4 segundos
@@ -129,7 +146,8 @@ public class PlayerActivity extends AppCompatActivity {
         if (getSupportActionBar() != null) getSupportActionBar().hide();
 
         playerView = findViewById(R.id.playerView);
-        playerView.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FILL);
+        // FIT en vez de FILL: FILL estira el video y lo deforma en pantallas 16:9/18:9
+        playerView.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FIT);
         playerView.setUseController(false);
 
 
@@ -151,6 +169,8 @@ public class PlayerActivity extends AppCompatActivity {
         setupMedia3Player();
         setupCustomControls();
         setupWebViewFallback();
+        registerPipReceiver();
+        aplicarParamsPip();          // Android 12+: deja listo el auto-entrar en PiP
         if (streamDirecto != null && !streamDirecto.isEmpty()) {
             resolverStreamDirecto(streamDirecto, streamCookies, streamReferer, streamOrigin);
         } else {
@@ -176,6 +196,8 @@ public class PlayerActivity extends AppCompatActivity {
                 if (player.isPlaying()) player.pause();
                 else player.play();
             }
+            updatePlayPauseButton();
+            actualizarAccionesPip();   // refresca el boton play/pausa del PiP
             resetControlsTimeout();
         });
 
@@ -226,8 +248,14 @@ public class PlayerActivity extends AppCompatActivity {
 
         // PiP
         btnPip.setOnClickListener(v -> {
-            if (player != null && player.isPlaying()) {
-                enterPipMode();
+            if (!soportaPip()) {
+                log("⚠️ Este dispositivo no soporta Picture-in-Picture");
+                Toast.makeText(this, "PiP no disponible en este dispositivo", Toast.LENGTH_SHORT).show();
+            } else if (!hayVideoNativo()) {
+                log("⚠️ Todavía no hay video nativo: no se puede entrar en PiP");
+                Toast.makeText(this, "Espera a que cargue el video", Toast.LENGTH_SHORT).show();
+            } else {
+                entrarEnPip();
             }
             resetControlsTimeout();
         });
@@ -328,75 +356,289 @@ public class PlayerActivity extends AppCompatActivity {
         }
     }
 
-    // --------------- PIP ---------------
+    // --------------- PICTURE IN PICTURE ---------------
+
+    /** El dispositivo soporta PiP (Android 8+ y con la feature del sistema). */
+    private boolean soportaPip() {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                && getPackageManager().hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE);
+    }
+
+    /** Solo tiene sentido entrar en PiP si hay video nativo (no el WebView). */
+    private boolean hayVideoNativo() {
+        return player != null && streamReady
+                && (webViewFallback == null || webViewFallback.getVisibility() != View.VISIBLE);
+    }
+
+    private boolean estaEnPipSistema() {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInPictureInPictureMode();
+    }
+
     @Override
-    public void onUserLeaveHint() {
-        if (player != null && player.isPlaying()) {
-            enterPipMode();
+    protected void onUserLeaveHint() {
+        super.onUserLeaveHint();
+        if (isInPipMode || entrandoEnPip) return;
+        if (soportaPip() && hayVideoNativo() && player != null && player.isPlaying()) {
+            entrarEnPip();
         }
     }
 
     @Override
     public void onBackPressed() {
-        if (player != null && player.isPlaying()) {
-            enterPipMode();          // Se va a PiP si está reproduciendo
+        // ANTES: si estaba reproduciendo volvia a entrar en PiP -> nunca se cerraba.
+        if (isInPipMode || entrandoEnPip) {
+            cerrarDesdePip();
+            return;
+        }
+        if (soportaPip() && hayVideoNativo() && player != null && player.isPlaying()) {
+            entrarEnPip();       // atras con el video en marcha -> ventana flotante
         } else {
-            // Cierra el reproductor y vuelve a la pantalla anterior
-            super.onBackPressed();   // finish() → regresa a Main
+            super.onBackPressed();   // -> finish()
         }
     }
 
-    private void enterPipMode() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Rational aspectRatio = new Rational(16, 9);
-            PictureInPictureParams params = new PictureInPictureParams.Builder()
-                    .setAspectRatio(aspectRatio)
-                    .build();
-            enterPictureInPictureMode(params);
+    private void entrarEnPip() {
+        if (!soportaPip() || isInPipMode) return;
+        try {
+            entrandoEnPip = true;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                enterPictureInPictureMode(construirParamsPip());
+            }
+        } catch (Exception e) {
+            entrandoEnPip = false;
+            log("⚠️ No se pudo entrar en PiP: " + e.getMessage());
+        }
+    }
+
+    @SuppressLint("NewApi")
+    private PictureInPictureParams construirParamsPip() {
+        PictureInPictureParams.Builder b = new PictureInPictureParams.Builder()
+                .setAspectRatio(relacionAspectoVideo())
+                .setActions(accionesPip());
+        Rect r = rectOrigenPip();
+        if (r != null) b.setSourceRectHint(r);      // animacion desde el video
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            b.setAutoEnterEnabled(hayVideoNativo());  // Android 12+: gesto de inicio -> PiP
+            b.setSeamlessResizeEnabled(false);
+        }
+        return b.build();
+    }
+
+    /** Prepara el auto-entrar ANTES de salir de la app (Android 12+). */
+    private void aplicarParamsPip() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || !soportaPip()) return;
+        try {
+            setPictureInPictureParams(construirParamsPip());
+        } catch (Exception ignored) { }
+    }
+
+    /** Refresca los botones del PiP sin volver a entrar en el modo. */
+    private void actualizarAccionesPip() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
+        if (!isInPipMode && !entrandoEnPip) return;
+        try {
+            setPictureInPictureParams(new PictureInPictureParams.Builder()
+                    .setAspectRatio(relacionAspectoVideo())
+                    .setActions(accionesPip())
+                    .build());
+        } catch (Exception ignored) { }
+    }
+
+    /** Relacion de aspecto REAL del video (antes era fija 16:9). */
+    private Rational relacionAspectoVideo() {
+        int w = 16, h = 9;
+        if (player != null) {
+            androidx.media3.common.VideoSize vs = player.getVideoSize();
+            if (vs != null && vs.width > 0 && vs.height > 0) {
+                w = vs.width;
+                h = vs.height;
+            }
+        }
+        float r = (float) w / (float) h;
+        if (r < 0.418410f) r = 0.418410f;   // limites que impone Android
+        if (r > 2.390000f) r = 2.390000f;
+        return new Rational(Math.round(r * 1000), 1000);
+    }
+
+    private Rect rectOrigenPip() {
+        if (playerView == null) return null;
+        int[] loc = new int[2];
+        playerView.getLocationOnScreen(loc);
+        return new Rect(loc[0], loc[1],
+                loc[0] + playerView.getWidth(), loc[1] + playerView.getHeight());
+    }
+
+    /** Botones visibles dentro de la ventana flotante. */
+    private java.util.List<RemoteAction> accionesPip() {
+        java.util.List<RemoteAction> acciones = new java.util.ArrayList<>();
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return acciones;
+        boolean reproduciendo = player != null && player.isPlaying();
+        acciones.add(new RemoteAction(
+                Icon.createWithResource(this, reproduciendo ? R.drawable.ic_pause : R.drawable.ic_play),
+                reproduciendo ? "Pausar" : "Reproducir",
+                reproduciendo ? "Pausar" : "Reproducir",
+                pendingIntentPip(PIP_ACTION_PLAY_PAUSE)));
+        acciones.add(new RemoteAction(
+                Icon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel),
+                "Cerrar",
+                "Cierra el reproductor y sale de PiP",
+                pendingIntentPip(PIP_ACTION_CLOSE)));
+        return acciones;
+    }
+
+    private PendingIntent pendingIntentPip(int accion) {
+        Intent i = new Intent(ACTION_PIP_CONTROL).setPackage(getPackageName());
+        i.putExtra(EXTRA_PIP_ACTION, accion);
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) flags |= PendingIntent.FLAG_IMMUTABLE;
+        return PendingIntent.getBroadcast(this, accion, i, flags);
+    }
+
+    private void registerPipReceiver() {
+        pipReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context ctx, Intent intent) {
+                if (intent == null || !ACTION_PIP_CONTROL.equals(intent.getAction())) return;
+                int accion = intent.getIntExtra(EXTRA_PIP_ACTION, 0);
+                if (accion == PIP_ACTION_PLAY_PAUSE) {
+                    alternarPlayPause();
+                    actualizarAccionesPip();
+                } else if (accion == PIP_ACTION_CLOSE) {
+                    cerrarDesdePip();
+                }
+            }
+        };
+        IntentFilter f = new IntentFilter(ACTION_PIP_CONTROL);
+        try {
+            if (Build.VERSION.SDK_INT >= 33) {
+                registerReceiver(pipReceiver, f, Context.RECEIVER_NOT_EXPORTED);
+            } else {
+                registerReceiver(pipReceiver, f);
+            }
+        } catch (Exception e) {
+            log("⚠️ No se pudo registrar el receptor de PiP: " + e.getMessage());
+        }
+    }
+
+    private void alternarPlayPause() {
+        if (player == null) return;
+        if (player.isPlaying()) player.pause();
+        else player.play();
+        updatePlayPauseButton();
+    }
+
+    /** Cierra de verdad el reproductor estando en PiP (antes no habia forma). */
+    private void cerrarDesdePip() {
+        log("⏹ Cerrando reproductor desde PiP");
+        cerrandoDesdePip = true;
+        try {
+            if (player != null) {
+                player.stop();
+                player.release();
+                player = null;
+            }
+        } catch (Exception ignored) { }
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) finishAndRemoveTask();
+            else finish();
+        } catch (Exception e) {
+            finish();
         }
     }
 
     @Override
-
-    public void onPictureInPictureModeChanged(boolean isInPictureInPictureMode, @NonNull Configuration newConfig) {
+    public void onPictureInPictureModeChanged(boolean isInPictureInPictureMode,
+                                              @NonNull Configuration newConfig) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig);
         isInPipMode = isInPictureInPictureMode;
+        entrandoEnPip = false;
         if (isInPictureInPictureMode) {
-            // Ocultar controles personalizados
+            // En PiP solo se ve el video: fuera controles y panel de depuracion
             if (controlsOverlay != null) {
                 controlsOverlay.setVisibility(View.GONE);
                 stopSeekUpdate();
             }
-            playerView.hideController();
+            if (playerView != null) {
+                playerView.hideController();
+                playerView.setUseController(false);
+            }
+            if (tvDebugLog != null) tvDebugLog.setVisibility(View.GONE);
+            if (scrollDebugLog != null) scrollDebugLog.setVisibility(View.GONE);
             hideSystemUI();
-        } else {
-            // Restaurar al volver de PiP
+            actualizarAccionesPip();
+        } else if (!cerrandoDesdePip) {
+            // Volvemos a pantalla completa
+            hideSystemUI();
             showControls();
-            playerView.showController();
-            hideSystemUI();
-            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
+            aplicarParamsPip();
         }
     }
+
     // --------------- CICLO DE VIDA ---------------
+
+    /** Con launchMode="singleTask" sirve para abrir otra peli/canal sin duplicar Activity. */
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (intent == null) return;
+        String nuevaUrl = intent.getStringExtra("stream_url");
+        String nuevoIframe = intent.getStringExtra("url_iframe_inicial");
+        if (nuevaUrl != null && !nuevaUrl.isEmpty()) {
+            streamDirecto = nuevaUrl;
+            streamCookies = intent.getStringExtra("stream_cookies");
+            streamReferer = intent.getStringExtra("stream_referer");
+            streamOrigin = intent.getStringExtra("stream_origin");
+            urlIframeInicial = null;
+            errorRefreshCount = 0;
+            resolverStreamDirecto(streamDirecto, streamCookies, streamReferer, streamOrigin);
+        } else if (nuevoIframe != null && !nuevoIframe.isEmpty()) {
+            urlIframeInicial = nuevoIframe;
+            streamDirecto = null;
+            errorRefreshCount = 0;
+            resolverStreamEnSegundoPlano();
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        // Si estamos entrando/ya en PiP el video sigue sonando: NO pausar.
+        if (!isInPipMode && !entrandoEnPip && !estaEnPipSistema() && player != null) {
+            try { player.pause(); } catch (Exception ignored) { }
+        }
+        super.onPause();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        hideSystemUI();
+        if (!isInPipMode) aplicarParamsPip();
+    }
+
     @Override
     protected void onStop() {
-        super.onStop();
-        if (!isInPipMode && player != null) {
-            player.pause();
-            player.release();
+        // ANTES: aqui se liberaba el player al ir a segundo plano, asi que al
+        // volver la pantalla quedaba en negro. Solo liberamos si la Activity se
+        // esta destruyendo de verdad (y nunca mientras estamos en PiP).
+        if (!isInPipMode && !entrandoEnPip && !estaEnPipSistema() && isFinishing() && player != null) {
+            try { player.release(); } catch (Exception ignored) { }
             player = null;
         }
-        // En PiP no liberamos recursos
+        super.onStop();
     }
 
     @Override
     protected void onDestroy() {
-        super.onDestroy();
+        if (pipReceiver != null) {
+            try { unregisterReceiver(pipReceiver); } catch (Exception ignored) { }
+            pipReceiver = null;
+        }
         if (executorService != null) {
             executorService.shutdownNow();
         }
         if (player != null) {
-            player.release();
+            try { player.release(); } catch (Exception ignored) { }
             player = null;
         }
         if (webViewFallback != null) {
@@ -407,6 +649,7 @@ public class PlayerActivity extends AppCompatActivity {
         }
         mainHandler.removeCallbacks(hideControlsRunnable);
         stopSeekUpdate();
+        super.onDestroy();
     }
 
     // --------------- MÉTODOS ORIGINALES (SIN CAMBIOS) ---------------
@@ -514,6 +757,14 @@ public class PlayerActivity extends AppCompatActivity {
             @Override
             public void onIsPlayingChanged(boolean isPlaying) {
                 updatePlayPauseButton();
+                actualizarAccionesPip();
+            }
+
+            @Override
+            public void onVideoSizeChanged(androidx.media3.common.VideoSize videoSize) {
+                // Si el video tiene otra relacion de aspecto (4:3, 21:9...) se
+                // reajusta la ventana flotante.
+                if (isInPipMode) actualizarAccionesPip();
             }
         });
     }

@@ -63,18 +63,31 @@
         <!-- Reproductor de video (fullscreen y PiP) -->
         <activity
             android:name=".PlayerActivity"
-            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout"
+            android:exported="false"
+            android:hardwareAccelerated="true"
+            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout|density"
             android:supportsPictureInPicture="true"
             android:resizeableActivity="true"
-            android:launchMode="singleTask" />
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.MyApplication" />
 
         <!-- Reproductor de video para PELIS (fullscreen y PiP), separado del de canales -->
         <activity
             android:name=".PelisPlayerActivity"
-            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout"
+            android:exported="false"
+            android:hardwareAccelerated="true"
+            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout|density"
             android:supportsPictureInPicture="true"
             android:resizeableActivity="true"
-            android:launchMode="singleTask" />
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.MyApplication" />
+
+        <!-- Pantalla de depuración del resolver (antes no estaba declarada -> ActivityNotFoundException) -->
+        <activity
+            android:name=".DebugResolverActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout"
+            android:label="Resolver debug" />
 
         <!-- Actividad de introducción de la aplicación (AppIntro) -->
         <activity
