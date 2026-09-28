@@ -45,3 +45,51 @@ app/src/main/java/
 - Si `embed69` devuelve `[]`, el resolver lo salta y usa `vsembed` (ya priorizado).
 
 Hecho para ti — listo para compilar APK.
+
+---
+
+## Qué hay en este repo (y dónde va cada cosa)
+
+```
+.gradle wrapper + build.gradle + settings.gradle   → proyecto Android listo para Android Studio
+app/src/main/AndroidManifest.xml, res/            → pertenecen al módulo de ejemplo (com.pelislatinohd.app)
+app/src/main/java/com/pelislatinohd.app/          → módulo de ejemplo que compila con esos res/
+app/src/main/java/dza/folbol/BLABONGO/            → resolver integrado
+*.java (en la RAÍZ)                               ← TU APP REAL (paquete dza.folbol.BLABONGO)
+```
+
+> **Importante:** los 34 `.java` de la raíz son las fuentes de tu app
+> (`PelisApi`, `PelisDetailActivity`, `PelisStreamResolver`, `PlayerActivity`…).
+> Para compilarlos, cópialos a `app/src/main/java/dza/folbol/BLABONGO/` **de tu proyecto
+> Android Studio** (el que tiene tus `res/layout` y tu `AndroidManifest.xml`).
+> No los dejes duplicados: `StreamResolver.java` existe en la raíz y en
+> `app/src/main/java/dza/folbol/BLABONGO/` → si Gradle compila los dos da *duplicate class*.
+
+Mejoras aplicadas al resolver: ver **MEJORAS-2026-09-28.md**
+(series arregladas, `generate.php` con caché de token y backoff 429, auto-selección del
+servidor en español, `StreamResolver.java` reparado porque no compilaba).
+
+Verificación en vivo (6/6 películas y series): `python3 tools/verify_final.py`.
+
+## Subir el proyecto completo a GitHub
+
+```bash
+# 1) crea el repo vacío (una sola vez)
+curl -H "Authorization: Bearer TU_TOKEN" \
+     -H "Accept: application/vnd.github+json" \
+     https://api.github.com/user/repos \
+     -d '{"name":"PelisLatinoHD-Completo","private":false,"auto_init":false}'
+
+# 2) súbelo
+cd PelisLatinoHD-App
+git init
+git config user.name  "barhomus10"
+git config user.email "34459883+barhomus10@users.noreply.github.com"
+git add -A
+git commit -m "PelisLatinoHD - app completa"
+git branch -M main
+git remote add origin https://oauth2:TU_TOKEN@github.com/barhomus10/PelisLatinoHD-Completo.git
+git push -u origin main
+```
+
+El token necesita permiso **Contents: Read and Write** sobre el repo.
