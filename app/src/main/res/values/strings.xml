@@ -1,0 +1,20 @@
+<resources>
+    <string name="app_name">PelisLatinoHD</string>
+    <string name="search_hint">Buscar películas, series, animes...</string>
+    <string name="menu_home">Inicio</string>
+    <string name="menu_movies">Películas</string>
+    <string name="menu_series">Series</string>
+    <string name="menu_animes">Animes</string>
+    <string name="menu_favorites">Favoritos</string>
+    <string name="menu_history">Historial</string>
+    <string name="play">Reproducir</string>
+    <string name="add_favorite">Favorito</string>
+    <string name="share">Compartir</string>
+    <string name="loading">Cargando...</string>
+    <string name="error_load">No se pudo cargar</string>
+    <string name="no_results">Sin resultados</string>
+    <string name="season">Temporada</string>
+    <string name="episode">Episodio</string>
+    <string name="resolving">Obteniendo enlaces...</string>
+    <string name="resolving_sub">Esto puede tardar 5-10 segundos</string>
+</resources>
