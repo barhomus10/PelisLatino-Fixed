@@ -219,7 +219,7 @@ public class PelisStreamResolver {
         }
     }
 
-    
+
     // ------------------------------------------------------------
     // VSEMBED FAST-PATH (WASM + Token) - VERIFICADO 2026-09-28 Python/Java
     // vsembed.ru NO expone .m3u8 directo: stream_urls cifrado ChaCha20
@@ -389,26 +389,26 @@ public class PelisStreamResolver {
                     }
                 });
                 String html = "<html><head><meta charset='utf-8'></head><body><script>\n" +
-                    "async function doDecrypt(){\n" +
-                    " try{\n" +
-                    "  const encB64 = \"" + encB64.replace("\"", "\\\"") + "\";\n" +
-                    "  const wasmUrl = \"" + wasmUrl + "\";\n" +
-                    "  const wasmBytes = await fetch(wasmUrl,{credentials:'omit'}).then(r=>r.arrayBuffer()).then(b=>new Uint8Array(b));\n" +
-                    "  const mod = await WebAssembly.compile(wasmBytes);\n" +
-                    "  const inst = await WebAssembly.instantiate(mod, {});\n" +
-                    "  const ex = inst.exports;\n" +
-                    "  function b64(s){ const bin=atob(s); const u=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) u[i]=bin.charCodeAt(i); return u; }\n" +
-                    "  const enc = b64(encB64);\n" +
-                    "  const ptr = ex.alloc(enc.length);\n" +
-                    "  new Uint8Array(ex.memory.buffer, ptr, enc.length).set(enc);\n" +
-                    "  const outLen = ex.decrypt(ptr, enc.length);\n" +
-                    "  const txt = new TextDecoder().decode(new Uint8Array(ex.memory.buffer, ptr+12, outLen));\n" +
-                    "  const urls = txt.split('\\n').filter(s=>s.trim().length>0);\n" +
-                    "  AndroidBridge.onDecrypted(JSON.stringify(urls));\n" +
-                    " }catch(e){ AndroidBridge.onError(String(e)); }\n" +
-                    "}\n" +
-                    "doDecrypt();\n" +
-                    "</script></body></html>";
+                        "async function doDecrypt(){\n" +
+                        " try{\n" +
+                        "  const encB64 = \"" + encB64.replace("\"", "\\\"") + "\";\n" +
+                        "  const wasmUrl = \"" + wasmUrl + "\";\n" +
+                        "  const wasmBytes = await fetch(wasmUrl,{credentials:'omit'}).then(r=>r.arrayBuffer()).then(b=>new Uint8Array(b));\n" +
+                        "  const mod = await WebAssembly.compile(wasmBytes);\n" +
+                        "  const inst = await WebAssembly.instantiate(mod, {});\n" +
+                        "  const ex = inst.exports;\n" +
+                        "  function b64(s){ const bin=atob(s); const u=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) u[i]=bin.charCodeAt(i); return u; }\n" +
+                        "  const enc = b64(encB64);\n" +
+                        "  const ptr = ex.alloc(enc.length);\n" +
+                        "  new Uint8Array(ex.memory.buffer, ptr, enc.length).set(enc);\n" +
+                        "  const outLen = ex.decrypt(ptr, enc.length);\n" +
+                        "  const txt = new TextDecoder().decode(new Uint8Array(ex.memory.buffer, ptr+12, outLen));\n" +
+                        "  const urls = txt.split('\\n').filter(s=>s.trim().length>0);\n" +
+                        "  AndroidBridge.onDecrypted(JSON.stringify(urls));\n" +
+                        " }catch(e){ AndroidBridge.onError(String(e)); }\n" +
+                        "}\n" +
+                        "doDecrypt();\n" +
+                        "</script></body></html>";
                 webView.loadDataWithBaseURL("https://cloudorchestranova.com/", html, "text/html", "utf-8", null);
                 new Handler(Looper.getMainLooper()).postDelayed(() -> {
                     if (latch.getCount() > 0) { err.set("timeout WASM decrypt"); latch.countDown(); try { webView.destroy(); } catch(Exception ignored){} }
@@ -424,7 +424,7 @@ public class PelisStreamResolver {
     }
 
 
-// ------------------------------------------------------------
+    // ------------------------------------------------------------
     // OKHTTP RECURSIVO
     // ------------------------------------------------------------
     private static String deepExtract(String url, int depth, Set<String> visited, String referer) {
@@ -773,31 +773,31 @@ public class PelisStreamResolver {
 
     private static String buildInjectScript() {
         String[] lines = {
-            "(function(){",
-            "  try {",
-            "    if (window.__pelisHook3) return;",
-            "    window.__pelisHook3 = true;",
-            "    var reported = {};",
-            "    function notify(u){ try{ if(!u || typeof u!=='string') return; if(u.indexOf('.m3u8')===-1 && u.indexOf('.mpd')===-1) return; if(reported[u]) return; reported[u]=1; window.PelisStreamBridge.found(u); }catch(e){} }",
-            "    function reportManifest(u){ try{ if(!u || typeof u!=='string') return; if(u.indexOf('blob:')===0) return; if(reported[u]) return; reported[u]=1; window.PelisStreamBridge.foundStream(u); }catch(e){} }",
-            "    function log(m){ try{ window.PelisStreamBridge.log(m); }catch(e){} }",
-            "    log('hook v3 instalado');",
-            "    function isManifestCT(ct){ if(!ct) return false; ct=(ct+'').toLowerCase(); return ct.indexOf('mpegurl')!==-1 || ct.indexOf('apple')!==-1 || ct.indexOf('x-mpeg')!==-1 || ct.indexOf('dash+xml')!==-1; }",
-            "    var _open = XMLHttpRequest.prototype.open;",
-            "    XMLHttpRequest.prototype.open = function(m,u){ try{ this.__pelis_url = (typeof u==='string'?u:(u&&u.url)||''); notify(this.__pelis_url); }catch(e){} return _open.apply(this, arguments); };",
-            "    var _send = XMLHttpRequest.prototype.send;",
-            "    XMLHttpRequest.prototype.send = function(){ var self=this; this.addEventListener('load', function(){ try{ var ct=self.getResponseHeader('content-type')||''; if(isManifestCT(ct)){ reportManifest(self.responseURL || self.__pelis_url); } try{ var rt=self.responseText||''; if(rt.length && rt.length<4*1024*1024){ var re=/(https?:\\/\\/[^\\s\"'<>]+(?:\\.m3u8|\\.mpd)[^\\s\"'<>]*)/gi, mm; while((mm=re.exec(rt))){ notify(mm[1]); } } }catch(e){} }catch(e){} }); return _send.apply(this, arguments); };",
-            "    var _fetch = window.fetch;",
-            "    if(_fetch){ window.fetch = function(u,o){ try{ var uu=typeof u==='string'?u:(u&&u.url||''); notify(uu); }catch(e){} return _fetch.apply(this, arguments).then(function(r){ try{ var ct = (r.headers && r.headers.get)? (r.headers.get('content-type')||'') : ''; if(isManifestCT(ct)){ reportManifest(r.url); } if(r && r.url && (r.url.indexOf('.m3u8')!==-1 || r.url.indexOf('.mpd')!==-1)){ notify(r.url); } try{ var cl=r.clone && r.clone(); if(cl && cl.text){ cl.text().then(function(t){ try{ if(t && t.length<4*1024*1024){ var re=/(https?:\\/\\/[^\\s\"'<>]+(?:\\.m3u8|\\.mpd)[^\\s\"'<>]*)/gi, mm; while((mm=re.exec(t))){ notify(mm[1]); } } }catch(e){} }); } }catch(e){} }catch(e){} return r; }); }; }",
-            "    try { var d = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype,'src'); if(d && d.set){ Object.defineProperty(HTMLMediaElement.prototype,'src',{ get:d.get, set:function(v){ notify(v); return d.set.call(this,v); }, configurable:true }); } } catch(e){}",
-            "    try { if(window.MediaSource){ var _o=MediaSource.prototype.addSourceBuffer; MediaSource.prototype.addSourceBuffer=function(m){ log('MSB '+m); return _o.apply(this,arguments); }; } }catch(e){}",
-            "    var obs = new MutationObserver(function(muts){ muts.forEach(function(m){ m.addedNodes.forEach(function(n){ try{ if(!n) return; if(n.src){ notify(n.src); } if(n.tagName==='SOURCE' && n.src){ notify(n.src); } if(n.tagName==='VIDEO' && n.src){ notify(n.src); } if(n.tagName==='IFRAME' && n.src){ try{ n.addEventListener('load', function(){ try{ var dd=n.contentDocument; if(dd){ dd.querySelectorAll('video,source').forEach(function(el){ notify(el.src); }); } }catch(e){} }); }catch(e){} } }catch(e){} }); }); });",
-            "    obs.observe(document.documentElement, {childList:true, subtree:true});",
-            "    try{ var re=/(https?:\\/\\/[^\\s\"'<>]+(?:\\.m3u8|\\.mpd)[^\\s\"'<>]*)/gi, mm; var html=document.documentElement.outerHTML; while((mm=re.exec(html))){ notify(mm[1]); } }catch(e){}",
-            "    function clickPlay(){ var sels=['video','.vjs-big-play-button','.jw-icon-display','button.play','[class*=\"play\"]','[class*=\"Play\"]','[aria-label*=\"play\"]','[aria-label*=\"Play\"]','.player .play']; for(var i=0;i<sels.length;i++){ try{ var el=document.querySelector(sels[i]); if(el){ el.click(); } }catch(e){} } try{ var v=document.querySelector('video'); if(v){ v.muted=true; var p=v.play(); if(p && p.catch) p.catch(function(){}); } }catch(e){} }",
-            "    clickPlay(); setTimeout(clickPlay, 800); setTimeout(clickPlay, 2000); setTimeout(clickPlay, 4000); setTimeout(clickPlay, 6500); setTimeout(clickPlay, 9000);",
-            "  } catch(e){ try{ window.PelisStreamBridge.log('inject error: '+e.message); }catch(_){} }",
-            "})();"
+                "(function(){",
+                "  try {",
+                "    if (window.__pelisHook3) return;",
+                "    window.__pelisHook3 = true;",
+                "    var reported = {};",
+                "    function notify(u){ try{ if(!u || typeof u!=='string') return; if(u.indexOf('.m3u8')===-1 && u.indexOf('.mpd')===-1) return; if(reported[u]) return; reported[u]=1; window.PelisStreamBridge.found(u); }catch(e){} }",
+                "    function reportManifest(u){ try{ if(!u || typeof u!=='string') return; if(u.indexOf('blob:')===0) return; if(reported[u]) return; reported[u]=1; window.PelisStreamBridge.foundStream(u); }catch(e){} }",
+                "    function log(m){ try{ window.PelisStreamBridge.log(m); }catch(e){} }",
+                "    log('hook v3 instalado');",
+                "    function isManifestCT(ct){ if(!ct) return false; ct=(ct+'').toLowerCase(); return ct.indexOf('mpegurl')!==-1 || ct.indexOf('apple')!==-1 || ct.indexOf('x-mpeg')!==-1 || ct.indexOf('dash+xml')!==-1; }",
+                "    var _open = XMLHttpRequest.prototype.open;",
+                "    XMLHttpRequest.prototype.open = function(m,u){ try{ this.__pelis_url = (typeof u==='string'?u:(u&&u.url)||''); notify(this.__pelis_url); }catch(e){} return _open.apply(this, arguments); };",
+                "    var _send = XMLHttpRequest.prototype.send;",
+                "    XMLHttpRequest.prototype.send = function(){ var self=this; this.addEventListener('load', function(){ try{ var ct=self.getResponseHeader('content-type')||''; if(isManifestCT(ct)){ reportManifest(self.responseURL || self.__pelis_url); } try{ var rt=self.responseText||''; if(rt.length && rt.length<4*1024*1024){ var re=/(https?:\\/\\/[^\\s\"'<>]+(?:\\.m3u8|\\.mpd)[^\\s\"'<>]*)/gi, mm; while((mm=re.exec(rt))){ notify(mm[1]); } } }catch(e){} }catch(e){} }); return _send.apply(this, arguments); };",
+                "    var _fetch = window.fetch;",
+                "    if(_fetch){ window.fetch = function(u,o){ try{ var uu=typeof u==='string'?u:(u&&u.url||''); notify(uu); }catch(e){} return _fetch.apply(this, arguments).then(function(r){ try{ var ct = (r.headers && r.headers.get)? (r.headers.get('content-type')||'') : ''; if(isManifestCT(ct)){ reportManifest(r.url); } if(r && r.url && (r.url.indexOf('.m3u8')!==-1 || r.url.indexOf('.mpd')!==-1)){ notify(r.url); } try{ var cl=r.clone && r.clone(); if(cl && cl.text){ cl.text().then(function(t){ try{ if(t && t.length<4*1024*1024){ var re=/(https?:\\/\\/[^\\s\"'<>]+(?:\\.m3u8|\\.mpd)[^\\s\"'<>]*)/gi, mm; while((mm=re.exec(t))){ notify(mm[1]); } } }catch(e){} }); } }catch(e){} }catch(e){} return r; }); }; }",
+                "    try { var d = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype,'src'); if(d && d.set){ Object.defineProperty(HTMLMediaElement.prototype,'src',{ get:d.get, set:function(v){ notify(v); return d.set.call(this,v); }, configurable:true }); } } catch(e){}",
+                "    try { if(window.MediaSource){ var _o=MediaSource.prototype.addSourceBuffer; MediaSource.prototype.addSourceBuffer=function(m){ log('MSB '+m); return _o.apply(this,arguments); }; } }catch(e){}",
+                "    var obs = new MutationObserver(function(muts){ muts.forEach(function(m){ m.addedNodes.forEach(function(n){ try{ if(!n) return; if(n.src){ notify(n.src); } if(n.tagName==='SOURCE' && n.src){ notify(n.src); } if(n.tagName==='VIDEO' && n.src){ notify(n.src); } if(n.tagName==='IFRAME' && n.src){ try{ n.addEventListener('load', function(){ try{ var dd=n.contentDocument; if(dd){ dd.querySelectorAll('video,source').forEach(function(el){ notify(el.src); }); } }catch(e){} }); }catch(e){} } }catch(e){} }); }); });",
+                "    obs.observe(document.documentElement, {childList:true, subtree:true});",
+                "    try{ var re=/(https?:\\/\\/[^\\s\"'<>]+(?:\\.m3u8|\\.mpd)[^\\s\"'<>]*)/gi, mm; var html=document.documentElement.outerHTML; while((mm=re.exec(html))){ notify(mm[1]); } }catch(e){}",
+                "    function clickPlay(){ var sels=['video','.vjs-big-play-button','.jw-icon-display','button.play','[class*=\"play\"]','[class*=\"Play\"]','[aria-label*=\"play\"]','[aria-label*=\"Play\"]','.player .play']; for(var i=0;i<sels.length;i++){ try{ var el=document.querySelector(sels[i]); if(el){ el.click(); } }catch(e){} } try{ var v=document.querySelector('video'); if(v){ v.muted=true; var p=v.play(); if(p && p.catch) p.catch(function(){}); } }catch(e){} }",
+                "    clickPlay(); setTimeout(clickPlay, 800); setTimeout(clickPlay, 2000); setTimeout(clickPlay, 4000); setTimeout(clickPlay, 6500); setTimeout(clickPlay, 9000);",
+                "  } catch(e){ try{ window.PelisStreamBridge.log('inject error: '+e.message); }catch(_){} }",
+                "})();"
         };
         StringBuilder sb = new StringBuilder();
         for (String l : lines) sb.append(l).append('\n');
