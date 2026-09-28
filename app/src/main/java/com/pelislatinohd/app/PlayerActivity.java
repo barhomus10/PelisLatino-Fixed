@@ -87,8 +87,10 @@ public class PlayerActivity extends AppCompatActivity {
         // ExoPlayer con headers
         Map<String,String> headers = new HashMap<>();
         if (r.headers != null) headers.putAll(r.headers);
-        // Asegurar referer/origin para petrichor
-        if (r.m3u8Url.contains("petrichorparallax")){
+        // FIX 2026-09-28: Headers para TODOS los hosts con token (nebulous, mycelium, bifurcation, zealotsofzenith, liminallabyrinth, etc.)
+        // Antes solo petrichor, ahora todos los que usan generate.php / token
+        boolean isTokenized = r.m3u8Url.contains("token=") || r.m3u8Url.contains("generate.php") || r.m3u8Url.matches(".*\\.(space|website|site|cloud)/pl/.*");
+        if (isTokenized){
             headers.put("Referer","https://cloudorchestranova.com/");
             headers.put("Origin","https://cloudorchestranova.com");
         } else if (!headers.containsKey("Referer") && r.referer!=null){
