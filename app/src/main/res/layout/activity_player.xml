@@ -5,13 +5,14 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:keepScreenOn="true">
 
+    <!-- Controles propios (custom_player_controls): use_controller=false -->
     <androidx.media3.ui.PlayerView
         android:id="@+id/playerView"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:background="@android:color/black"
         app:show_buffering="when_playing"
-        app:use_controller="false"   <!-- usamos controles propios (custom_player_controls) --> />
+        app:use_controller="false" />
 
     <WebView
         android:id="@+id/webPlayable"
