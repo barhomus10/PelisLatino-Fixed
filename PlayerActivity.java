@@ -568,6 +568,36 @@ private void setupWebViewFallback() {
         });
     }
 
+    /**
+     * MEJORA 2026-09-28: elige el resolver según la URL.
+     *
+     * vsembed (y equivalentes con ds_lang=es o cloudorchestranova) no exponen el
+     * m3u8 en el HTML: hay que pasar por vs_src -> cloudorchestranova ->
+     * data.vidsrc.sh -> WASM -> token. Eso lo hace PelisStreamResolver.
+     * StreamResolver solo usa WebView y con esos dominios se queda en timeout,
+     * así que antes el reproductor caía al modo WebView aunque sí había stream.
+     */
+    private StreamResolver.StreamResult resolverInteligente(String url) throws Exception {
+        if (url != null && (url.contains("vsembed") || url.contains("ds_lang=es")
+                || url.contains("cloudorchestranova"))) {
+            log("Usando PelisStreamResolver (vsembed WASM+Token)...");
+            try {
+                PelisStreamResolver.StreamResult pr =
+                        PelisStreamResolver.resolveSynchronously(PlayerActivity.this, url);
+                if (pr != null && pr.m3u8Url != null && !pr.m3u8Url.isEmpty()) {
+                    log("✅ PelisStreamResolver devolvió master HLS");
+                    return new StreamResolver.StreamResult(pr.m3u8Url, pr.cookies,
+                            pr.referer, pr.origin, pr.headers);
+                }
+            } catch (Throwable t) {
+                log("⚠️ PelisStreamResolver falló: " + t.getMessage());
+            }
+            log("⚠️ Sin stream por el camino rápido, probando resolver genérico...");
+        }
+        log("Resolviendo stream con StreamResolver (WebView)...");
+        return StreamResolver.resolveSynchronously(PlayerActivity.this, url);
+    }
+
     private void resolverStreamEnSegundoPlano() {
         if (isResolving) {
             log("⏳ Ya se está resolviendo, ignoramos llamada duplicada.");
@@ -577,8 +607,8 @@ private void setupWebViewFallback() {
 
         executorService.execute(() -> {
             try {
-                 log("Resolviendo stream con StreamResolver (WebView)...");
-                 StreamResolver.StreamResult result = StreamResolver.resolveSynchronously(PlayerActivity.this, urlIframeInicial);
+                 log("Resolviendo stream con el resolver adecuado...");
+                 StreamResolver.StreamResult result = resolverInteligente(urlIframeInicial);
                  if (result == null || result.m3u8Url == null || result.m3u8Url.isEmpty()) {
                      log("❌ StreamResolver no devolvió stream. Cambiando a reproductor web.");
                      mainHandler.post(() -> {

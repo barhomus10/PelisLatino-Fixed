@@ -90,7 +90,21 @@ public class StreamResolver {
             .followRedirects(true)
             .build();
 
-    public static class StreamResult
+    public static class StreamResult{
+        public final String m3u8Url;
+        public final String cookies;
+        public final String referer;
+        public final String origin;
+        public final Map<String, String> headers;
+        public StreamResult(String m3u8Url, String cookies, String referer, String origin, Map<String, String> headers) {
+            this.m3u8Url = m3u8Url; this.cookies = cookies!=null?cookies:""; this.referer = referer!=null?referer:""; this.origin = origin!=null?origin:""; this.headers = headers!=null?headers:new HashMap<>();
+        }
+        public StreamResult(String m3u8Url, String cookies, String referer, Map<String, String> headers) {
+            this(m3u8Url, cookies, referer, getBaseUrl(referer), headers);
+        }
+    }
+
+
     // === VSEMBED FIX 2026-09-28: WASM+Token para vsembed (peliculas) ===
     private static boolean isVsEmbed(String url) {
         if (url == null) return false;
@@ -146,8 +160,20 @@ public class StreamResolver {
         String imdb = extractImdbVs(vsembedUrl);
         String dsLang = extractDsLangVs(vsembedUrl);
         if (imdb == null) throw new IOException("vsembed sin imdb: " + vsembedUrl);
-        String type = vsembedUrl.contains("/tv/") || vsembedUrl.contains("type=tv") ? "tv" : "movie";
+        // ---- SERIES (2026-09-28) -------------------------------------------
+        // URL real de un episodio:
+        //   https://vsembed.ru/embed/tv?imdb=ttX&season=1&episode=1&ds_lang=es
+        // Antes solo se miraba "/tv/" o "type=tv" -> los episodios se
+        // resolvian como type=movie y fallaban.
+        String season = queryParamVs(vsembedUrl, "season");
+        if (season == null) season = queryParamVs(vsembedUrl, "se");
+        String episode = queryParamVs(vsembedUrl, "episode");
+        if (episode == null) episode = queryParamVs(vsembedUrl, "ep");
+        boolean isTv = vsembedUrl.contains("/tv/") || vsembedUrl.contains("type=tv")
+                || vsembedUrl.contains("/embed/tv") || (season != null && episode != null);
+        String type = isTv ? "tv" : "movie";
         String vsSrcUrl = "https://vsembed.ru/vs_src.php?type=" + type + "&id=" + imdb + "&ds_lang=" + (dsLang != null ? dsLang : "es");
+        if (isTv && season != null && episode != null) vsSrcUrl += "&season=" + season + "&episode=" + episode;
         Log.d(TAG, "[vsembed] 1 vs_src: " + vsSrcUrl);
         String vsSrcJson = httpGetVs(vsSrcUrl, vsembedUrl);
         String cloudUrl = extractJsonStringVs(vsSrcJson, "src");
@@ -161,8 +187,21 @@ public class StreamResolver {
         Log.d(TAG, "[vsembed] 2 playerUrl: " + playerUrl);
         String playerHtml = httpGetVs(playerUrl, cloudUrl);
         String apiUrl = extractRegexVs(playerHtml, "\"api\"\\s*:\\s*\"([^\"]+)\"");
-        if (apiUrl == null) throw new IOException("CONFIG.api no encontrado");
-        apiUrl = apiUrl.replace("\\u0026","&");
+        if (apiUrl != null) {
+            apiUrl = apiUrl.replace("\\u0026","&");
+        } else {
+            // SERIES: el CONFIG de TV no trae "api", trae "streamBase"
+            // (sin season/episode): hay que componerlo a mano.
+            String streamBase = extractRegexVs(playerHtml, "\"streamBase\"\\s*:\\s*\"([^\"]+)\"");
+            if (streamBase == null) throw new IOException("CONFIG sin api ni streamBase");
+            streamBase = streamBase.replace("\\u0026","&");
+            if (season == null) season = extractRegexVs(playerHtml, "\"season\"\\s*:\\s*(\\d+)");
+            if (episode == null) episode = extractRegexVs(playerHtml, "\"episode\"\\s*:\\s*(\\d+)");
+            apiUrl = streamBase
+                    + (season != null && episode != null ? "&season=" + season + "&episode=" + episode : "")
+                    + "&stream_urls";
+            Log.d(TAG, "[vsembed] api construida desde streamBase (tv)");
+        }
         Log.d(TAG, "[vsembed] 3 api: " + apiUrl);
         String apiJson = httpGetVs(apiUrl, "https://cloudorchestranova.com/");
         String encB64 = extractJsonStringVs(apiJson, "stream_urls");
@@ -173,20 +212,47 @@ public class StreamResolver {
         List<String> rawUrls = decryptViaWebViewVs(context, encB64, wasmUrl, w);
         if (rawUrls == null || rawUrls.isEmpty()) throw new IOException("WASM decrypt vacío");
         Log.d(TAG, "[vsembed] 5 rawUrls: " + rawUrls.size() + " -> " + rawUrls.get(0));
-        String raw = rawUrls.get(0);
-        String host = new URL(raw).getHost();
-        String tokenUrl = "https://" + host + "/generate.php";
-        Log.d(TAG, "[vsembed] 6 token: " + tokenUrl);
-        String token = httpGetVs(tokenUrl, "https://cloudorchestranova.com/").trim().replace("\"","");
-        if (token.length() < 50) throw new IOException("token inválido: " + token);
-        Log.d(TAG, "[vsembed] token " + token.substring(0,20) + "...");
-        String tokenized = raw.contains("__TOKEN__") ? raw.replace("__TOKEN__", token) : raw + (raw.contains("?") ? "&" : "?") + "token=" + token;
-        Log.d(TAG, "[vsembed] 7 tokenized: " + tokenized);
-        String master = httpGetVs(tokenized, "https://cloudorchestranova.com/");
-        if (master.contains("no token") || !master.contains("#EXTM3U")) {
-            throw new IOException("master.m3u8 inválido: " + master.substring(0, Math.min(100, master.length())));
+        // ---- TOKEN CACHEADO + REINTENTO (2026-09-28) ------------------------
+        // generate.php responde 429 Too Many Requests en rafaga; el token
+        // es un JWT (exp-iat 14400s) ligado a ip_cidr: se cachea por host.
+        String master = null;
+        String tokenized = null;
+        IOException lastErr = null;
+        for (int attempt = 0; attempt < 3 && tokenized == null; attempt++) {
+            if (attempt > 0) {
+                try { Thread.sleep(1200); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+            }
+            for (int i = 0; i < rawUrls.size(); i++) {
+                String raw = rawUrls.get(i);
+                String host;
+                try { host = new URL(raw).getHost(); } catch (Exception e) { continue; }
+                try {
+                    String token = getTokenVs(host, attempt > 0);
+                    String tz = raw.contains("__TOKEN__") ? raw.replace("__TOKEN__", token)
+                            : raw + (raw.contains("?") ? "&" : "?") + "token=" + token;
+                    String body = httpGetVs(tz, "https://cloudorchestranova.com/");
+                    if (!body.contains("#EXTM3U") || body.contains("no token") || body.contains("invalid token")) {
+                        Log.w(TAG, "[vsembed] master inválido espejo " + i + ": "
+                                + body.substring(0, Math.min(80, body.length())));
+                        lastErr = new IOException("master inválido (espejo " + i + ")");
+                        invalidateTokenVs(host);
+                        continue;
+                    }
+                    master = body;
+                    tokenized = tz;
+                    Log.d(TAG, "[vsembed] 8 master OK " + master.length() + "B espejo " + i + " en "
+                            + (System.currentTimeMillis()-t0) + "ms");
+                    break;
+                } catch (IOException e) {
+                    Log.w(TAG, "[vsembed] fallo espejo " + i + ": " + e.getMessage());
+                    lastErr = e;
+                    invalidateTokenVs(host);
+                }
+            }
         }
-        Log.d(TAG, "[vsembed] 8 master OK " + master.length() + " en " + (System.currentTimeMillis()-t0) + "ms");
+        if (tokenized == null) {
+            throw lastErr != null ? lastErr : new IOException("ningún espejo devolvió un master válido");
+        }
         Map<String,String> headers = getDefaultHeaders("https://cloudorchestranova.com/");
         headers.put("Referer", "https://cloudorchestranova.com/");
         headers.put("Origin", "https://cloudorchestranova.com");
@@ -194,6 +260,76 @@ public class StreamResolver {
         try { cookies = CookieManager.getInstance().getCookie("https://cloudorchestranova.com"); } catch (Exception ignored) {}
         if (cookies == null) cookies = "";
         return new StreamResult(tokenized, cookies, "https://cloudorchestranova.com/", "https://cloudorchestranova.com", headers);
+    }
+
+    // ------------------------------------------------------------
+    // HELPERS AÑADIDOS 2026-09-28 (series + cache de token)
+    // ------------------------------------------------------------
+    private static String queryParamVs(String url, String key) {
+        try {
+            String q = new URL(url).getQuery();
+            if (q == null) return null;
+            for (String p : q.split("&")) {
+                int eq = p.indexOf('=');
+                if (eq > 0 && p.substring(0, eq).equals(key)) return p.substring(eq + 1);
+            }
+        } catch (Exception ignored) { }
+        return null;
+    }
+
+    private static String getTokenVs(String host, boolean forceRefresh) throws IOException {
+        if (!forceRefresh) {
+            String cached = TOKEN_CACHE.get(host);
+            Long exp = TOKEN_EXP.get(host);
+            if (cached != null && exp != null && System.currentTimeMillis() < exp - 60_000L) {
+                Log.d(TAG, "[vsembed] token cacheado reutilizado para " + host);
+                return cached;
+            }
+        }
+        String tokenUrl = "https://" + host + "/generate.php";
+        Log.d(TAG, "[vsembed] 6 token: " + tokenUrl + (forceRefresh ? " (refresh)" : ""));
+        // generate.php limita por rafaga: ante un 429 esperamos 2s y reintentamos una vez.
+        for (int i = 0; i < 2; i++) {
+            String token;
+            try {
+                token = httpGetVs(tokenUrl, "https://cloudorchestranova.com/").trim().replace("\"", "");
+            } catch (IOException e) {
+                String m = e.getMessage() == null ? "" : e.getMessage();
+                if (m.contains("429") && i == 0) {
+                    Log.w(TAG, "[vsembed] 429 en generate.php, esperando 2s y reintentando");
+                    try { Thread.sleep(2000); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+                    continue;
+                }
+                throw e;
+            }
+            if (token.length() < 50 || token.contains("<")) {
+                throw new IOException("respuesta de generate.php no es un token (" + token.length() + "B)");
+            }
+            TOKEN_CACHE.put(host, token);
+            TOKEN_EXP.put(host, System.currentTimeMillis() + tokenExpMillisVs(token));
+            return token;
+        }
+        throw new IOException("no se pudo obtener token de " + host);
+    }
+
+    private static void invalidateTokenVs(String host) {
+        TOKEN_CACHE.remove(host);
+        TOKEN_EXP.remove(host);
+    }
+
+    private static long tokenExpMillisVs(String token) {
+        long fallback = 30 * 60 * 1000L;
+        try {
+            String[] parts = token.split("\\.");
+            if (parts.length < 2) return fallback;
+            byte[] payload = Base64.decode(parts[1].replace("=", ""),
+                    Base64.URL_SAFE | Base64.NO_PADDING | Base64.NO_WRAP);
+            String exp = extractRegexVs(new String(payload, "UTF-8"), "\"exp\"\\s*:\\s*(\\d+)");
+            if (exp == null) return fallback;
+            return Math.max(60_000L, Long.parseLong(exp) * 1000L - System.currentTimeMillis());
+        } catch (Exception e) {
+            return fallback;
+        }
     }
 
     private static List<String> decryptViaWebViewVs(Context context, String encB64, String wasmUrl, String w) throws Exception {
@@ -289,19 +425,6 @@ public class StreamResolver {
         return res;
     }
 
- {
-        public final String m3u8Url;
-        public final String cookies;
-        public final String referer;
-        public final String origin;
-        public final Map<String, String> headers;
-        public StreamResult(String m3u8Url, String cookies, String referer, String origin, Map<String, String> headers) {
-            this.m3u8Url = m3u8Url; this.cookies = cookies!=null?cookies:""; this.referer = referer!=null?referer:""; this.origin = origin!=null?origin:""; this.headers = headers!=null?headers:new HashMap<>();
-        }
-        public StreamResult(String m3u8Url, String cookies, String referer, Map<String, String> headers) {
-            this(m3u8Url, cookies, referer, getBaseUrl(referer), headers);
-        }
-    }
 
     public static StreamResult resolveSynchronously(Context context, String initialUrl) {
         if (initialUrl == null || initialUrl.isEmpty()) return null;

@@ -241,6 +241,22 @@ public class PelisDetailActivity extends AppCompatActivity {
         final List<String> nombres = new ArrayList<>(servidores.opciones.keySet());
         final List<String> urls = new ArrayList<>(servidores.opciones.values());
 
+        // MEJORA 2026-09-28: auto-selección del servidor en español.
+        // PelisResolver ya ordena primero las opciones con vsembed / ds_lang=es,
+        // y es el único camino verificado (WASM + Token -> master.m3u8).
+        // Los demás (vimeus, embed69) suelen caer en Cloudflare 522, así que
+        // evitamos preguntar y conectamos directo. Si no hay opción en español
+        // se mantiene el diálogo de siempre.
+        for (int i = 0; i < urls.size(); i++) {
+            String u = urls.get(i);
+            if (u != null && (u.contains("vsembed") || u.contains("ds_lang=es"))) {
+                Log.d(TAG, "Servidor automático (español): " + nombres.get(i));
+                txtEstado.setText("Conectando con el servidor en español…");
+                resolverYReproducir(u);
+                return;
+            }
+        }
+
         if (urls.size() == 1) {
             resolverYReproducir(urls.get(0));
             return;

@@ -30,6 +30,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -88,6 +89,11 @@ public class PelisStreamResolver {
 
     private static final Pattern PACKER_HINT = Pattern.compile(
             "eval\\(function\\(p,a,c,k,e", Pattern.CASE_INSENSITIVE);
+
+
+    // Cache de tokens por host (ver comentario en getToken).
+    private static final ConcurrentHashMap<String, String> TOKEN_CACHE = new ConcurrentHashMap<String, String>();
+    private static final ConcurrentHashMap<String, Long> TOKEN_EXP = new ConcurrentHashMap<String, Long>();
 
     private static final OkHttpClient httpClient = new OkHttpClient.Builder()
             .connectTimeout(8, TimeUnit.SECONDS)
@@ -279,8 +285,19 @@ public class PelisStreamResolver {
         String imdb = extractImdb(vsembedUrl);
         String dsLang = extractDsLang(vsembedUrl);
         if (imdb == null) throw new IOException("vsembed sin imdb: " + vsembedUrl);
-        String type = vsembedUrl.contains("/tv/") || vsembedUrl.contains("type=tv") ? "tv" : "movie";
+        // ---- SERIES (2026-09-28) -------------------------------------------
+        // URL real de un episodio: .../embed/tv?imdb=ttX&season=1&episode=1&ds_lang=es
+        // Antes solo se miraba "/tv/" o "type=tv" -> los episodios se resolvian
+        // como type=movie y el resolver fallaba (caia al reproductor WebView).
+        String season = queryParam(vsembedUrl, "season");
+        if (season == null) season = queryParam(vsembedUrl, "se");
+        String episode = queryParam(vsembedUrl, "episode");
+        if (episode == null) episode = queryParam(vsembedUrl, "ep");
+        boolean isTv = vsembedUrl.contains("/tv/") || vsembedUrl.contains("type=tv")
+                || vsembedUrl.contains("/embed/tv") || (season != null && episode != null);
+        String type = isTv ? "tv" : "movie";
         String vsSrcUrl = "https://vsembed.ru/vs_src.php?type=" + type + "&id=" + imdb + "&ds_lang=" + (dsLang != null ? dsLang : "es");
+        if (isTv && season != null && episode != null) vsSrcUrl += "&season=" + season + "&episode=" + episode;
         Log.d(TAG, "[vsembed] 1 vs_src: " + vsSrcUrl);
         String vsSrcJson = httpGet(vsSrcUrl, vsembedUrl);
         String cloudUrl = extractJsonString(vsSrcJson, "src");
@@ -294,8 +311,21 @@ public class PelisStreamResolver {
         Log.d(TAG, "[vsembed] 2 playerUrl: " + playerUrl);
         String playerHtml = httpGet(playerUrl, cloudUrl);
         String apiUrl = extractRegex(playerHtml, "\"api\"\\s*:\\s*\"([^\"]+)\"");
-        if (apiUrl == null) throw new IOException("CONFIG.api no encontrado");
-        apiUrl = apiUrl.replace("\\u0026","&");
+        if (apiUrl != null) {
+            apiUrl = apiUrl.replace("\\u0026","&");
+        } else {
+            // SERIES: el CONFIG de TV no trae "api", trae "streamBase" SIN
+            // season/episode. Hay que componerlo: streamBase + &season=S&episode=E&stream_urls
+            String streamBase = extractRegex(playerHtml, "\"streamBase\"\\s*:\\s*\"([^\"]+)\"");
+            if (streamBase == null) throw new IOException("CONFIG sin api ni streamBase");
+            streamBase = streamBase.replace("\\u0026","&");
+            if (season == null) season = extractRegex(playerHtml, "\"season\"\\s*:\\s*(\\d+)");
+            if (episode == null) episode = extractRegex(playerHtml, "\"episode\"\\s*:\\s*(\\d+)");
+            apiUrl = streamBase
+                    + (season != null && episode != null ? "&season=" + season + "&episode=" + episode : "")
+                    + "&stream_urls";
+            Log.d(TAG, "[vsembed] api construida desde streamBase (tv)");
+        }
         Log.d(TAG, "[vsembed] 3 api: " + apiUrl);
         String apiJson = httpGet(apiUrl, "https://cloudorchestranova.com/");
         String encB64 = extractJsonString(apiJson, "stream_urls");
@@ -307,20 +337,51 @@ public class PelisStreamResolver {
         if (rawUrls == null || rawUrls.isEmpty()) throw new IOException("WASM decrypt vacío");
         Log.d(TAG, "[vsembed] 5 rawUrls: " + rawUrls.size() + " -> " + rawUrls.get(0));
         System.out.println("[PELIS-DBG] vsembed raw " + rawUrls.get(0));
-        String raw = rawUrls.get(0);
-        String host = new URL(raw).getHost();
-        String tokenUrl = "https://" + host + "/generate.php";
-        Log.d(TAG, "[vsembed] 6 token: " + tokenUrl);
-        String token = httpGet(tokenUrl, "https://cloudorchestranova.com/").trim().replace("\"","");
-        if (token.length() < 50) throw new IOException("token inválido: " + token);
-        Log.d(TAG, "[vsembed] token " + token.substring(0,20) + "...");
-        String tokenized = raw.contains("__TOKEN__") ? raw.replace("__TOKEN__", token) : raw + (raw.contains("?") ? "&" : "?") + "token=" + token;
-        Log.d(TAG, "[vsembed] 7 tokenized: " + tokenized);
-        String master = httpGet(tokenized, "https://cloudorchestranova.com/");
-        if (master.contains("no token") || !master.contains("#EXTM3U")) {
-            throw new IOException("master.m3u8 inválido: " + master.substring(0, Math.min(100, master.length())));
+
+        // ---- TOKEN CACHEADO + REINTENTO (2026-09-28) ------------------------
+        // generate.php devuelve 429 Too Many Requests si se llama en rafaga
+        // (medido: 1er token 211B valido; 2o y 3o -> HTML 429 de 569B).
+        // El token es un JWT con exp-iat = 14400s ligado a ip_cidr: se cachea.
+        // Si el master llega con "invalid token"/"no token"/403 se refresca.
+        String master = null;
+        String tokenized = null;
+        IOException lastErr = null;
+        for (int attempt = 0; attempt < 3 && tokenized == null; attempt++) {
+            if (attempt > 0) {
+                try { Thread.sleep(1200); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+            }
+            for (int i = 0; i < rawUrls.size(); i++) {
+                String raw = rawUrls.get(i);
+                String host;
+                try { host = new URL(raw).getHost(); } catch (Exception e) { continue; }
+                try {
+                    String token = getToken(host, attempt > 0);
+                    String tz = raw.contains("__TOKEN__")
+                            ? raw.replace("__TOKEN__", token)
+                            : raw + (raw.contains("?") ? "&" : "?") + "token=" + token;
+                    String body = httpGet(tz, "https://cloudorchestranova.com/");
+                    if (!body.contains("#EXTM3U") || body.contains("no token") || body.contains("invalid token")) {
+                        Log.w(TAG, "[vsembed] master inválido en espejo " + i + ": "
+                                + body.substring(0, Math.min(80, body.length())));
+                        lastErr = new IOException("master inválido (espejo " + i + ")");
+                        invalidateToken(host);
+                        continue;
+                    }
+                    master = body;
+                    tokenized = tz;
+                    Log.d(TAG, "[vsembed] 8 master OK " + master.length() + "B espejo " + i
+                            + " intento " + attempt + " en " + (System.currentTimeMillis()-t0) + "ms");
+                    break;
+                } catch (IOException e) {
+                    Log.w(TAG, "[vsembed] fallo espejo " + i + ": " + e.getMessage());
+                    lastErr = e;
+                    invalidateToken(host);
+                }
+            }
         }
-        Log.d(TAG, "[vsembed] 8 master OK " + master.length() + " en " + (System.currentTimeMillis()-t0) + "ms");
+        if (tokenized == null) {
+            throw lastErr != null ? lastErr : new IOException("ningún espejo devolvió un master válido");
+        }
         Map<String,String> headers = getDefaultHeaders("https://cloudorchestranova.com/");
         headers.put("Referer", "https://cloudorchestranova.com/");
         headers.put("Origin", "https://cloudorchestranova.com");
@@ -328,6 +389,87 @@ public class PelisStreamResolver {
         try { cookies = CookieManager.getInstance().getCookie("https://cloudorchestranova.com"); } catch (Exception ignored) {}
         if (cookies == null) cookies = "";
         return new StreamResult(tokenized, cookies, "https://cloudorchestranova.com/", "https://cloudorchestranova.com", headers);
+    }
+
+    // ------------------------------------------------------------
+    // HELPERS AÑADIDOS 2026-09-28 (series + cache de token)
+    // ------------------------------------------------------------
+
+    /** Parámetro de query de una URL (null si no está). */
+    private static String queryParam(String url, String key) {
+        try {
+            String q = new URL(url).getQuery();
+            if (q == null) return null;
+            for (String p : q.split("&")) {
+                int eq = p.indexOf('=');
+                if (eq > 0 && p.substring(0, eq).equals(key)) return p.substring(eq + 1);
+            }
+        } catch (Exception ignored) { }
+        return null;
+    }
+
+    /**
+     * Token del host, cacheado mientras no expire. generate.php responde
+     * 429 Too Many Requests si se le llama varias veces seguidas, asi que
+     * reutilizar el token evita errores y acelera la reproduccion.
+     */
+    private static String getToken(String host, boolean forceRefresh) throws IOException {
+        if (!forceRefresh) {
+            String cached = TOKEN_CACHE.get(host);
+            Long exp = TOKEN_EXP.get(host);
+            if (cached != null && exp != null && System.currentTimeMillis() < exp - 60_000L) {
+                Log.d(TAG, "[vsembed] token cacheado reutilizado para " + host);
+                return cached;
+            }
+        }
+        String tokenUrl = "https://" + host + "/generate.php";
+        Log.d(TAG, "[vsembed] 6 token: " + tokenUrl + (forceRefresh ? " (refresh)" : ""));
+        // generate.php aplica un limite de rafaga: si llega un 429 esperamos un
+        // par de segundos y reintentamos UNA vez, sin bombardear el servidor.
+        for (int i = 0; i < 2; i++) {
+            String token;
+            try {
+                token = httpGet(tokenUrl, "https://cloudorchestranova.com/").trim().replace("\"", "");
+            } catch (IOException e) {
+                String m = e.getMessage() == null ? "" : e.getMessage();
+                if (m.contains("429") && i == 0) {
+                    Log.w(TAG, "[vsembed] 429 en generate.php, esperando 2s y reintentando");
+                    try { Thread.sleep(2000); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+                    continue;
+                }
+                throw e;
+            }
+            if (token.length() < 50 || token.contains("<")) {
+                throw new IOException("respuesta de generate.php no es un token (" + token.length() + "B)");
+            }
+            TOKEN_CACHE.put(host, token);
+            TOKEN_EXP.put(host, System.currentTimeMillis() + tokenExpMillis(token));
+            Log.d(TAG, "[vsembed] token " + token.substring(0, Math.min(20, token.length())) + "...");
+            return token;
+        }
+        throw new IOException("no se pudo obtener token de " + host);
+    }
+
+    private static void invalidateToken(String host) {
+        TOKEN_CACHE.remove(host);
+        TOKEN_EXP.remove(host);
+    }
+
+    /** Milisegundos que queda de vida al token según su claim exp (JWT). */
+    private static long tokenExpMillis(String token) {
+        long fallback = 30 * 60 * 1000L;
+        try {
+            String[] parts = token.split("\\.");
+            if (parts.length < 2) return fallback;
+            byte[] payload = Base64.decode(parts[1].replace("=", ""),
+                    Base64.URL_SAFE | Base64.NO_PADDING | Base64.NO_WRAP);
+            String json = new String(payload, "UTF-8");
+            String exp = extractRegex(json, "\"exp\"\\s*:\\s*(\\d+)");
+            if (exp == null) return fallback;
+            return Math.max(60_000L, Long.parseLong(exp) * 1000L - System.currentTimeMillis());
+        } catch (Exception e) {
+            return fallback;
+        }
     }
 
     private static List<String> decryptViaWebView(Context context, String encB64, String wasmUrl, String w) throws Exception {
