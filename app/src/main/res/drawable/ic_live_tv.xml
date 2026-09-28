@@ -1,0 +1,14 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Cuerpo del televisor -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M21,7v10H8l-4,4v-4H3V7h18zM19,9H5v6h14V9z" />
+    <!-- Triángulo de reproducción -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M10,9l5,3l-5,3z" />
+</vector>

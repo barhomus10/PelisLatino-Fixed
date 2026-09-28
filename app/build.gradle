@@ -1,0 +1,57 @@
+plugins {
+    alias(libs.plugins.android.application)
+}
+
+android {
+    namespace 'dza.folbol.BLABONGO'
+    compileSdk 36
+    buildFeatures {
+        buildConfig = true
+    }
+    testOptions {
+        unitTests.returnDefaultValues = true
+    }
+    defaultConfig {
+        applicationId "dza.folbol.BLABONGO"
+        minSdk 30
+        targetSdk 30
+        versionCode 7
+        versionName "7.0"
+
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+}
+
+dependencies {
+    implementation 'com.github.bumptech.glide:glide:4.16.0'
+    implementation 'androidx.media3:media3-exoplayer:1.2.0'
+    implementation 'androidx.media3:media3-exoplayer-hls:1.2.0'
+    implementation 'androidx.media3:media3-ui:1.2.0'
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    implementation 'com.google.code.gson:gson:2.10.1'
+    implementation 'androidx.recyclerview:recyclerview:1.3.2'
+    // Jsoup para extraer enlaces
+    implementation 'org.jsoup:jsoup:1.17.2'
+
+    // GSON para procesar el JSON
+    implementation 'com.google.code.gson:gson:2.10.1'
+    implementation libs.appcompat
+    implementation libs.material
+    implementation libs.media3.exoplayer.hls
+    implementation libs.play.services.maps3d
+    testImplementation libs.junit
+    androidTestImplementation libs.ext.junit
+    androidTestImplementation libs.espresso.core
+    implementation 'com.startapp:inapp-sdk:5.3.0'
+}

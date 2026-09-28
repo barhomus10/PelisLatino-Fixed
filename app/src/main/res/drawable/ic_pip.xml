@@ -1,0 +1,11 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="28dp"
+    android:height="28dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFF">
+    <!-- Icono de PiP corregido: Un rectángulo grande con un rectángulo pequeño y limpio dentro -->
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M2,2v20h20V2H2z M19,17H5V7h14V17z M16,10h-5v4h5V10z"/>
+</vector>

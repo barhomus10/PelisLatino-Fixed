@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">BLABONGO</string>
+    <string name="navigation_drawer_open">Abrir menú lateral</string>
+    <string name="navigation_drawer_close">Cerrar menú lateral</string>
+    
+    <!-- AppIntro Activity Strings -->
+    <string name="btn_skip">Saltar</string>
+    <string name="btn_next">Siguiente</string>
+    <string name="btn_finish">Comenzar</string>
+</resources>
