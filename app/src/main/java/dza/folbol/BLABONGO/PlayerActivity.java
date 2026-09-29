@@ -707,18 +707,12 @@ public class PlayerActivity extends AppCompatActivity {
             hideSystemUI();
             actualizarAccionesPip();
 
-            // La app NO debe seguir visible detrás de la ventanita flotante.
-            // OJO: moveTaskToBack() hacía que el sistema CERRARA el PiP en
-            // algunos móviles, así que en su lugar se cierran las pantallas
-            // que quedan por debajo (sin tocar el reproductor).
-            mainHandler.postDelayed(() -> {
-                if (isInPipMode && !isFinishing() && !cerrandoDesdePip) {
-                    try {
-                        BlabongoApp.cerrarTodasExcepto(PlayerActivity.this);
-                        log("PiP: app oculta, solo queda el vídeo flotando");
-                    } catch (Throwable ignored) { }
-                }
-            }, 400);
+            // Comportamiento estándar de Android (YouTube, Chrome...): la app
+            // sigue abierta detrás y la ventanita flota encima.
+            // OJO: no mover la tarea al fondo (moveTaskToBack) ni cerrar las
+            // pantallas de detrás: moveTaskToBack() apaga el PiP en algunos
+            // móviles y cerrarlas hacía que la app se cerrara del todo.
+            log("PiP: ventanita flotando, solo el vídeo");
         } else if (!cerrandoDesdePip) {
             // Volvemos a pantalla completa
             restaurarVistasTrasPip();
@@ -728,27 +722,43 @@ public class PlayerActivity extends AppCompatActivity {
         }
     }
 
-    /** Oculta TODO menos el vídeo: en PiP no debe verse nada de la app. */
+    /**
+     * Oculta la interfaz para que en el PiP SOLO se vea el vídeo
+     * (ni controles, ni panel de depuración, ni WebView).
+     *
+     * Se recorre el camino desde el vídeo hasta la raíz ocultando los HERMANOS
+     * de cada nivel. Nunca se oculta el vídeo ni ninguno de sus contenedores:
+     * ocultarlos deja el PiP en NEGRO (se oye pero no se ve).
+     */
     private void ocultarTodoMenosElVideo() {
         visibilidadPrePip.clear();
-        View root = findViewById(android.R.id.content);
-        if (root instanceof ViewGroup) ocultarRecursivo((ViewGroup) root);
+        if (playerView != null) {
+            View hijo = playerView;
+            android.view.ViewParent padre = hijo.getParent();
+            while (padre instanceof ViewGroup) {
+                ViewGroup grupo = (ViewGroup) padre;
+                for (int i = 0; i < grupo.getChildCount(); i++) {
+                    View v = grupo.getChildAt(i);
+                    if (v == hijo) continue;               // por aquí sube el vídeo
+                    visibilidadPrePip.put(v, v.getVisibility());
+                    if (v.getVisibility() != View.GONE) v.setVisibility(View.GONE);
+                }
+                hijo = grupo;
+                padre = grupo.getParent();
+            }
+        }
         if (playerView != null) {
             playerView.hideController();
             playerView.setUseController(false);
         }
-        if (tvDebugLog != null) tvDebugLog.setVisibility(View.GONE);
-        if (scrollDebugLog != null) scrollDebugLog.setVisibility(View.GONE);
-    }
-
-    /** Oculta en cascada todo lo que no sea el PlayerView. */
-    private void ocultarRecursivo(ViewGroup grupo) {
-        for (int i = 0; i < grupo.getChildCount(); i++) {
-            View v = grupo.getChildAt(i);
-            if (v == playerView) continue;      // ni el vídeo ni lo que contiene
-            visibilidadPrePip.put(v, v.getVisibility());
-            if (v.getVisibility() != View.GONE) v.setVisibility(View.GONE);
-            if (v instanceof ViewGroup) ocultarRecursivo((ViewGroup) v);
+        // El panel de depuración se recuerda para poder restaurarlo al salir.
+        if (tvDebugLog != null) {
+            visibilidadPrePip.put(tvDebugLog, tvDebugLog.getVisibility());
+            tvDebugLog.setVisibility(View.GONE);
+        }
+        if (scrollDebugLog != null) {
+            visibilidadPrePip.put(scrollDebugLog, scrollDebugLog.getVisibility());
+            scrollDebugLog.setVisibility(View.GONE);
         }
     }
 
