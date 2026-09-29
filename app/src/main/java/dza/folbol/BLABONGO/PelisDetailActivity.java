@@ -255,19 +255,22 @@ public class PelisDetailActivity extends AppCompatActivity {
      */
     private List<Integer> ordenServidores(List<String> nombres, List<String> urls) {
         int[] prio = new int[urls.size()];
-        for (int i = 0; i < urls.size(); i++) {
-            String k = (nombres.get(i) == null ? "" : nombres.get(i)).toLowerCase(Locale.US);
-            String u = (urls.get(i) == null ? "" : urls.get(i)).toLowerCase(Locale.US);
-            if (u.contains("vimeus") || k.equals("alt")) prio[i] = 0;         // LATINO (audio es)
-            else if (u.contains("embed69") || k.equals("alt1")) prio[i] = 1;  // MULTI (LAT/ESP)
-            else if (u.contains("vsembed") || k.equals("alt3")) prio[i] = 3;  // INGLÉS
-            else prio[i] = 2;
-        }
+        for (int i = 0; i < urls.size(); i++) prio[i] = prioridad(nombres.get(i), urls.get(i));
         List<Integer> orden = new ArrayList<>();
         for (int p = 0; p <= 3; p++) {
             for (int i = 0; i < urls.size(); i++) if (prio[i] == p) orden.add(i);
         }
         return orden;
+    }
+
+    /** 0 = vimeus (español), 1 = embed69 (LAT/ESP), 2 = otro, <b>3 = vsembed (inglés)</b>. */
+    private static int prioridad(String nombre, String url) {
+        String k = (nombre == null ? "" : nombre).toLowerCase(Locale.US);
+        String u = (url == null ? "" : url).toLowerCase(Locale.US);
+        if (u.contains("vimeus") || k.equals("alt")) return 0;
+        if (u.contains("embed69") || k.equals("alt1")) return 1;
+        if (u.contains("vsembed") || k.equals("alt3")) return 3;
+        return 2;
     }
 
     private void elegirServidor(final PelisResolver.Servidores servidores) {
@@ -300,6 +303,16 @@ public class PelisDetailActivity extends AppCompatActivity {
         final int i = orden.get(idx);
         final String url = urls.get(i);
         final String nombre = nombres.get(i);
+
+        // Último recurso: el único servidor que queda es el que solo tiene
+        // copias en inglés. Se avisa al usuario antes de reproducirlo.
+        if (prioridad(nombre, url) == 3) {
+            txtEstado.setText("⚠️ Sin copia en español; se reproducirá en inglés");
+            Toast.makeText(this,
+                    "⚠️ Este título solo está disponible en INGLÉS\n"
+                            + "(sin audio ni subtítulos en español)",
+                    Toast.LENGTH_LONG).show();
+        }
 
         // Presupuesto global: si llevamos demasiado tiempo buscando español,
         // pasamos al último servidor de la lista para que el usuario no espere.
