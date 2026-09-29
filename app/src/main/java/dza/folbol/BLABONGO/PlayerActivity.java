@@ -707,21 +707,27 @@ public class PlayerActivity extends AppCompatActivity {
             hideSystemUI();
             actualizarAccionesPip();
 
-            // Comportamiento ESTÁNDAR de Android: al entrar en PiP el SISTEMA
-            // esconde la aplicación y solo se ve la ventanita flotante.
-            // moveTaskToBack() manda la tarea al fondo SIN destruir nada, así
-            // que al cerrar el PiP la app vuelve a pantalla completa tal cual.
-            // (Ojo: NO vale cerrar las Activities de detrás: eso sí cerraba la
-            // app del todo y ya no se podía restaurar.)
+            // Comportamiento ESTÁNDAR de Android: al entrar en PiP la
+            // aplicación SE ESCONDE y solo queda la ventanita flotante; al
+            // salir del PiP la app vuelve a pantalla completa.
+            //
+            // Para esconderla NO vale moveTaskToBack(): en muchos móviles
+            // (Samsung, Xiaomi, Android 12+) destruye la ventanita del PiP,
+            // y entonces se veía la app a pantalla completa y el reproductor
+            // flotante desaparecía, justo al revés de lo que tiene que pasar.
+            //
+            // Lo que hace el sistema es ir al escritorio: es lo mismo que
+            // pulsar el botón de inicio, el PiP sigue vivo encima de todo y
+            // la tarea de la app queda intacta para restaurarla después.
+            mainHandler.postDelayed(this::esconderAppCuandoEstaEnPip, 500);
+            // Vigía: si la ventanita se pierde sola, se apunta en el log de
+            // depuración para poder saberlo.
             mainHandler.postDelayed(() -> {
-                if (!isInPipMode || isFinishing() || cerrandoDesdePip) return;
-                try {
-                    moveTaskToBack(true);
-                    log("PiP: app al fondo, solo la ventanita flotante");
-                } catch (Throwable t) {
-                    log("⚠️ No se pudo mandar la app al fondo: " + t.getMessage());
+                if (cerrandoDesdePip || isFinishing()) return;
+                if (!estaEnPipSistema() && entrandoEnPip) {
+                    log("⚠️ El sistema no llegó a abrir el PiP");
                 }
-            }, 400);
+            }, 2000);
             try {
                 String info = "PiP · nativo=" + hayVideoNativo()
                         + (player != null ? ", playing=" + player.isPlaying() : ", player=null");
@@ -737,7 +743,51 @@ public class PlayerActivity extends AppCompatActivity {
             hideSystemUI();
             showControls();
             aplicarParamsPip();
+            // Al salir del PiP el sistema devuelve la app a pantalla completa.
+            // Si se cerró la ventanita desde el escritorio, la tarea puede
+            // quedarse detrás: se trae al frente para que la app aparezca tal
+            // como estaba. (Si ya está delante no hace nada.)
+            mainHandler.postDelayed(this::traerAppAlFrente, 300);
         }
+    }
+
+    /**
+     * Esconde la aplicación para que al entrar en PiP solo se vea la
+     * ventanita flotante. Se llama un poco después de entrar en PiP, para dar
+     * tiempo a que la ventanita esté montada.
+     *
+     * NO se usa moveTaskToBack(): en muchos móviles (Samsung, Xiaomi,
+     * Android 12+) destruye la ventanita del PiP y entonces se quedaba la app
+     * a pantalla completa y el reproductor flotante desaparecía, al revés de
+     * lo que tiene que pasar. Ir al escritorio es lo mismo que pulsar el botón
+     * de inicio: el PiP sigue vivo encima de todo y la tarea queda intacta.
+     */
+    private void esconderAppCuandoEstaEnPip() {
+        if (!isInPipMode || isFinishing() || cerrandoDesdePip) return;
+        try {
+            Intent inicio = new Intent(Intent.ACTION_MAIN);
+            inicio.addCategory(Intent.CATEGORY_HOME);
+            inicio.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(inicio);
+            log("PiP: app escondida, solo la ventanita flotante");
+        } catch (Throwable t) {
+            log("⚠️ No se pudo esconder la app: " + t.getMessage());
+        }
+    }
+
+    /**
+     * Devuelve la app a pantalla completa al salir del PiP. Si ya estaba
+     * delante no hace nada (es lo que pasa al tocar la ventanita para
+     * expandirla); si se cerró desde el escritorio, la trae al frente.
+     */
+    private void traerAppAlFrente() {
+        if (isInPipMode || isFinishing() || cerrandoDesdePip) return;
+        try {
+            Intent traer = new Intent(this, PlayerActivity.class);
+            traer.setFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                    | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            startActivity(traer);
+        } catch (Throwable ignored) { }
     }
 
     /**
