@@ -158,6 +158,7 @@ public final class Embed69Resolver {
                     headers.put("Referer", origen(enlace));
                     headers.put("Origin", origen(enlace).substring(0, origen(enlace).length() - 1));
                     headers.put("Accept", "*/*");
+                    headers.put("Accept-Language", "es-ES,es;q=0.9");
                     Log.d(TAG, "OK idioma=" + lang + " servidor=" + nombre + " ("
                             + (System.currentTimeMillis() - t0) + "ms)");
                     return new PelisStreamResolver.StreamResult(

@@ -139,6 +139,9 @@ public final class VimeusResolver {
         headers.put("Referer", "https://vimeos.net/");
         headers.put("Origin", "https://vimeos.net");
         headers.put("Accept", "*/*");
+        // OBLIGATORIO: sin Accept-Language el CDN de vimeos responde 403 tanto
+        // en el master como en los segmentos .ts (comprobado en vivo).
+        headers.put("Accept-Language", "es-ES,es;q=0.9");
 
         return new PelisStreamResolver.StreamResult(m3u8, "", "https://vimeos.net/",
                 "https://vimeos.net", headers);

@@ -1214,6 +1214,12 @@ public class PlayerActivity extends AppCompatActivity {
                     if (!hasReferer) {
                         finalHeaders.put("Referer", referer != null ? referer : "https://belkaperu.github.io/");
                     }
+                    // Sin Accept-Language, CDNs como vimeos devuelven 403 (verificado).
+                    boolean hasLang = false;
+                    for (String key : finalHeaders.keySet()) {
+                        if (key.equalsIgnoreCase("Accept-Language")) { hasLang = true; break; }
+                    }
+                    if (!hasLang) finalHeaders.put("Accept-Language", "es-ES,es;q=0.9");
 
                     boolean hasOrigin = false;
                     for (String key : finalHeaders.keySet()) {
@@ -1283,6 +1289,10 @@ public class PlayerActivity extends AppCompatActivity {
             if (referer != null && !referer.isEmpty()) headers.put("Referer", referer);
             if (origin != null && !origin.isEmpty()) headers.put("Origin", origin);
             if (cookies != null && !cookies.isEmpty()) headers.put("Cookie", cookies);
+            // Sin Accept-Language, CDNs como vimeos devuelven 403 (verificado).
+            if (!headers.containsKey("Accept-Language")) {
+                headers.put("Accept-Language", "es-ES,es;q=0.9");
+            }
             player.stop();
             player.clearMediaItems();
             dataSourceFactory.setDefaultRequestProperties(headers);
