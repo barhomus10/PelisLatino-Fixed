@@ -58,6 +58,12 @@ public class PelisDetailActivity extends AppCompatActivity {
     private Button btnReproducir;
     /** Momento en que arrancó la búsqueda del mejor servidor (cadena). */
     private long inicioCadena = 0L;
+    /**
+     * Número de cadena en curso. Al cambiar de película se incrementa, así una
+     * resolución VIEJA que termine tarde no puede abrir el stream anterior y
+     * pisar la película nueva.
+     */
+    private int idCadena = 0;
     private ProgressBar progress;
     private LinearLayout contenedorEpisodios;
     private Spinner spinnerTemporadas;
@@ -288,12 +294,18 @@ public class PelisDetailActivity extends AppCompatActivity {
         // Varios servidores: se prueban EN ORDEN DE IDIOMA y gana el primero que
         // realmente resuelve un m3u8. Si ninguno puede, se muestra el diálogo.
         final List<Integer> orden = ordenServidores(nombres, urls);
+        final int miCadena = ++idCadena;
         inicioCadena = System.currentTimeMillis();
-        probarServidor(nombres, urls, orden, 0);
+        probarServidor(nombres, urls, orden, 0, miCadena);
     }
 
     private void probarServidor(final List<String> nombres, final List<String> urls,
-                                final List<Integer> orden, final int idx) {
+                                final List<Integer> orden, final int idx,
+                                final int miCadena) {
+        if (miCadena != idCadena) {
+            Log.d(TAG, "Cadena " + miCadena + " caducada (ya se eligió otro título); se descarta");
+            return;
+        }
         if (idx >= orden.size()) {
             btnReproducir.setEnabled(true);
             txtEstado.setText("Ningún servidor respondió. Elige uno:");
@@ -346,10 +358,14 @@ public class PelisDetailActivity extends AppCompatActivity {
                     listo.referer = finalSr.referer;
                     listo.origin = finalSr.origin;
                     listo.headers = finalSr.headers;
+                    if (miCadena != idCadena) {
+                        Log.d(TAG, "Resultado descartado: llegó tarde (cadena " + miCadena + ")");
+                        return;
+                    }
                     txtEstado.setText("▶ " + PelisResolver.etiqueta(nombre));
                     abrirReproductorConStream(listo);
                 } else {
-                    probarServidor(nombres, urls, orden, idx + 1);
+                    probarServidor(nombres, urls, orden, idx + 1, miCadena);
                 }
             });
         });
@@ -412,6 +428,7 @@ public class PelisDetailActivity extends AppCompatActivity {
      * reproductor nativo en modo WebView cargando el propio embed.
      */
     private void resolverYReproducir(final String url) {
+        final int miCadena = ++idCadena;
         btnReproducir.setEnabled(false);
         txtEstado.setText("Resolviendo stream del servidor…");
         Log.d(TAG, "Resolviendo m3u8 desde servidor: " + url);
@@ -427,6 +444,10 @@ public class PelisDetailActivity extends AppCompatActivity {
             final PelisStreamResolver.StreamResult finalSr = sr;
             runOnUiThread(() -> {
                 if (isFinishing()) return;
+                if (miCadena != idCadena) {
+                    Log.d(TAG, "Resolución manual descartada (cadena " + miCadena + ")");
+                    return;
+                }
                 btnReproducir.setEnabled(true);
                 if (finalSr != null && finalSr.m3u8Url != null && !finalSr.m3u8Url.isEmpty()) {
                     Log.d(TAG, "m3u8 resuelto: " + finalSr.m3u8Url);

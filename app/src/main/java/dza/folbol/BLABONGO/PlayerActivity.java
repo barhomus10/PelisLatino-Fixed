@@ -105,6 +105,8 @@ public class PlayerActivity extends AppCompatActivity {
 
     private boolean streamReady = false;
     private boolean isResolving = false;
+    /** Momento en que arrancó la resolución en curso (para el "perro guardián"). */
+    private long resolucionInicio = 0L;
     private int errorRefreshCount = 0;
     private static final int MAX_REFRESH_RETRIES = 5;
     private long lastRefreshTime = 0;
@@ -489,6 +491,32 @@ public class PlayerActivity extends AppCompatActivity {
         }
     }
 
+    /**
+     * Si el reproductor se liberó al cerrar (player == null) lo vuelve a crear.
+     * Imprescindible porque esta Activity es singleTask: al abrir otra película
+     * Android puede reutilizar la instancia (onNewIntent) en lugar de crear una
+     * nueva, y sin esto la segunda película no sonaba nunca.
+     */
+    private boolean asegurarPlayer() {
+        if (player != null) return true;
+        if (isFinishing()) return false;
+        try {
+            cerrandoDesdePip = false;
+            setupMedia3Player();
+            log("♻️ Reproductor recreado para el nuevo título");
+        } catch (Throwable t) {
+            Log.e(TAG, "No se pudo recrear el reproductor: " + t.getMessage(), t);
+        }
+        return player != null;
+    }
+
+    /** Si el executor se apagó al salir, se crea uno nuevo. */
+    private void asegurarExecutor() {
+        if (executorService == null || executorService.isShutdown() || executorService.isTerminated()) {
+            executorService = Executors.newSingleThreadExecutor();
+        }
+    }
+
     /** Pide el foco de audio: si otra app está sonando, la calla. */
     @SuppressWarnings("deprecation")
     private void pedirFocoAudio() {
@@ -740,6 +768,12 @@ public class PlayerActivity extends AppCompatActivity {
         super.onNewIntent(intent);
         setIntent(intent);
         if (intent == null) return;
+        // Venimos de cerrar o de otra película: se limpia cualquier resolución
+        // anterior y se garantiza que el reproductor existe.
+        isResolving = false;
+        resolucionInicio = 0L;
+        cerrandoDesdePip = false;
+        asegurarPlayer();
         String nuevaUrl = intent.getStringExtra("stream_url");
         String nuevoIframe = intent.getStringExtra("url_iframe_inicial");
         if (nuevaUrl != null && !nuevaUrl.isEmpty()) {
@@ -771,6 +805,13 @@ public class PlayerActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         hideSystemUI();
+        // Si la Activity se reutilizó tras cerrarla, el reproductor puede estar
+        // liberado: se recrea para que el título actual pueda sonar.
+        if (!isFinishing() && player == null
+                && ((streamDirecto != null && !streamDirecto.isEmpty())
+                    || (urlIframeInicial != null && !urlIframeInicial.isEmpty()))) {
+            asegurarPlayer();
+        }
         if (!isInPipMode) aplicarParamsPip();
     }
 
@@ -798,6 +839,7 @@ public class PlayerActivity extends AppCompatActivity {
         }
         if (executorService != null) {
             executorService.shutdownNow();
+            executorService = null;   // asegurarExecutor() lo crea de nuevo si hace falta
         }
         liberarPlayer();
         if (instanciaActiva == this) instanciaActiva = null;
@@ -1054,11 +1096,29 @@ public class PlayerActivity extends AppCompatActivity {
     }
 
     private void resolverStreamEnSegundoPlano() {
+        // PERRO GUARDIÁN: si una resolución anterior se quedó colgada más de
+        // 60 s (hilo muerto, executor apagado...), se libera el bloqueo; si no,
+        // la Activity dejaba de resolver CUALQUIER stream para siempre y solo
+        // funcionaba la primera película.
+        if (isResolving && System.currentTimeMillis() - resolucionInicio > 60_000) {
+            log("⚠️ La resolución anterior se quedó colgada; se libera el bloqueo");
+            isResolving = false;
+        }
         if (isResolving) {
             log("⏳ Ya se está resolviendo, ignoramos llamada duplicada.");
             return;
         }
         isResolving = true;
+        resolucionInicio = System.currentTimeMillis();
+
+        try {
+            asegurarExecutor();
+        } catch (Throwable t) {
+            isResolving = false;
+            log("❌ No se pudo preparar el hilo de resolución: " + t.getMessage());
+            mostrarFallbackWebView();
+            return;
+        }
 
         executorService.execute(() -> {
             try {
@@ -1177,8 +1237,9 @@ public class PlayerActivity extends AppCompatActivity {
             return;
         }
         log("Reproduciendo stream m3u8 directo (sin WebView)");
+        isResolving = false;
         mainHandler.post(() -> {
-            if (player == null) return;
+            if (!asegurarPlayer()) return;
             Map<String, String> headers = new HashMap<>();
             headers.put("User-Agent", StreamResolver.DESKTOP_USER_AGENT);
             if (referer != null && !referer.isEmpty()) headers.put("Referer", referer);
