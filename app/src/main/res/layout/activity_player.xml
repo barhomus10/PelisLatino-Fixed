@@ -12,7 +12,8 @@
         android:layout_height="match_parent"
         android:background="@android:color/black"
         app:show_buffering="when_playing"
-        app:use_controller="false" />
+        app:use_controller="false"
+        app:surface_type="texture_view" />
 
     <WebView
         android:id="@+id/webPlayable"

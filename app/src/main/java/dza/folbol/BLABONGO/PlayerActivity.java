@@ -713,6 +713,15 @@ public class PlayerActivity extends AppCompatActivity {
             // pantallas de detrás: moveTaskToBack() apaga el PiP en algunos
             // móviles y cerrarlas hacía que la app se cerrara del todo.
             log("PiP: ventanita flotando, solo el vídeo");
+            try {
+                String info = "PiP · nativo=" + hayVideoNativo()
+                        + (player != null ? ", playing=" + player.isPlaying() : ", player=null");
+                if (player != null) {
+                    androidx.media3.common.VideoSize vs = player.getVideoSize();
+                    info += ", video=" + vs.width + "x" + vs.height;
+                }
+                log(info);
+            } catch (Throwable ignored) { }
         } else if (!cerrandoDesdePip) {
             // Volvemos a pantalla completa
             restaurarVistasTrasPip();
@@ -732,6 +741,15 @@ public class PlayerActivity extends AppCompatActivity {
      */
     private void ocultarTodoMenosElVideo() {
         visibilidadPrePip.clear();
+        // Si el vídeo lo está dando el WebView de respaldo, hay que dejar ESE
+        // visible y ocultar el PlayerView; si no, el PiP sale negro (se oye el
+        // audio del WebView pero no se ve nada).
+        final boolean videoEnWebView = webViewFallback != null
+                && webViewFallback.getVisibility() == View.VISIBLE;
+        if (videoEnWebView) {
+            visibilidadPrePip.put(playerView, playerView.getVisibility());
+            playerView.setVisibility(View.GONE);
+        }
         if (playerView != null) {
             View hijo = playerView;
             android.view.ViewParent padre = hijo.getParent();
@@ -740,6 +758,7 @@ public class PlayerActivity extends AppCompatActivity {
                 for (int i = 0; i < grupo.getChildCount(); i++) {
                     View v = grupo.getChildAt(i);
                     if (v == hijo) continue;               // por aquí sube el vídeo
+                    if (videoEnWebView && v == webViewFallback) continue;  // es el que se ve
                     visibilidadPrePip.put(v, v.getVisibility());
                     if (v.getVisibility() != View.GONE) v.setVisibility(View.GONE);
                 }
