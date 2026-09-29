@@ -41,6 +41,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.Collections;
 
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -62,6 +63,38 @@ public class PelisStreamResolver {
     private static final String TAG = "M3u8PelisResolver";
     private static final long WEBVIEW_TIMEOUT_MS = 28_000;
     private static final int MAX_IFRAME_DEPTH = 4;
+
+
+    // ------------------------------------------------------------------
+    // Los WebView de resolución cargan el embed del servidor y su reproductor
+    // puede arrancar SOLO (autoplay). Si no se cierran de golpe, ese audio se
+    // queda sonando después de cerrar el reproductor, y al abrir otro título
+    // se cruzaban dos audios. Desde aquí se pueden matar todos a la vez.
+    // ------------------------------------------------------------------
+    private static final List<WebView> webViewsActivos =
+            Collections.synchronizedList(new ArrayList<WebView>());
+
+    /** Cierra YA todos los WebViews de resolución: nada sigue sonando. */
+    public static void destruirWebViewsActivos() {
+        final List<WebView> copia;
+        synchronized (webViewsActivos) {
+            copia = new ArrayList<WebView>(webViewsActivos);
+            webViewsActivos.clear();
+        }
+        if (copia.isEmpty()) return;
+        Runnable accion = new Runnable() {
+            @Override public void run() {
+                for (WebView w : copia) {
+                    try { w.stopLoading(); } catch (Throwable ignored) { }
+                    try { w.loadUrl("about:blank"); } catch (Throwable ignored) { }
+                    try { w.removeAllViews(); } catch (Throwable ignored) { }
+                    try { w.destroy(); } catch (Throwable ignored) { }
+                }
+            }
+        };
+        if (Looper.myLooper() == Looper.getMainLooper()) accion.run();
+        else new Handler(Looper.getMainLooper()).post(accion);
+    }
 
     public static final String DESKTOP_USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
@@ -691,8 +724,10 @@ public class PelisStreamResolver {
                 try {
                     Log.i(TAG, "[WebView] creando");
                     System.out.println("[PELIS-DBG] WebView creando");
+                    destruirWebViewsActivos();   // nunca dos a la vez: se cruzaban los audios
                     WebView wv = new WebView(context);
                     holder[0] = wv;
+                    webViewsActivos.add(wv);
 
                     WebSettings ws = wv.getSettings();
                     ws.setJavaScriptEnabled(true);
@@ -840,6 +875,7 @@ public class PelisStreamResolver {
         main.post(new Runnable() {
             @Override public void run() {
                 if (destroyed.compareAndSet(false, true) && holder[0] != null) {
+                    webViewsActivos.remove(holder[0]);
                     try {
                         holder[0].stopLoading();
                         holder[0].loadUrl("about:blank");

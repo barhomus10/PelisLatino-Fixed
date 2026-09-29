@@ -475,6 +475,10 @@ public class PelisDetailActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        // Si quedaba algún WebView de resolución cargando un embed, se destruye:
+        // su reproductor arranca solo y el audio se quedaba sonando.
+        try { PelisStreamResolver.destruirWebViewsActivos(); } catch (Throwable ignored) { }
+        try { StreamResolver.destruirWebViewsActivos(); } catch (Throwable ignored) { }
         super.onDestroy();
         if (!executorService.isShutdown()) {
             executorService.shutdownNow();

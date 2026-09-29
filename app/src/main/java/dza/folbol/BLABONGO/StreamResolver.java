@@ -26,6 +26,9 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.Collections;
+import java.util.List;
+import java.util.ArrayList;
 
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -37,6 +40,38 @@ public class StreamResolver {
     private static final long WEBVIEW_TIMEOUT_MS = 10_000; // reducimos timeout para no retener recursos
     public static final String DESKTOP_USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
+
+    // ------------------------------------------------------------------
+    // Los WebView de resolución cargan el embed del servidor y su reproductor
+    // puede arrancar SOLO (autoplay). Si no se cierran de golpe, ese audio se
+    // queda sonando después de cerrar el reproductor, y al abrir otro título
+    // se cruzaban dos audios. Desde aquí se pueden matar todos a la vez.
+    // ------------------------------------------------------------------
+    private static final List<WebView> webViewsActivos =
+            Collections.synchronizedList(new ArrayList<WebView>());
+
+    /** Cierra YA todos los WebViews de resolución: nada sigue sonando. */
+    public static void destruirWebViewsActivos() {
+        final List<WebView> copia;
+        synchronized (webViewsActivos) {
+            copia = new ArrayList<WebView>(webViewsActivos);
+            webViewsActivos.clear();
+        }
+        if (copia.isEmpty()) return;
+        Runnable accion = new Runnable() {
+            @Override public void run() {
+                for (WebView w : copia) {
+                    try { w.stopLoading(); } catch (Throwable ignored) { }
+                    try { w.loadUrl("about:blank"); } catch (Throwable ignored) { }
+                    try { w.removeAllViews(); } catch (Throwable ignored) { }
+                    try { w.destroy(); } catch (Throwable ignored) { }
+                }
+            }
+        };
+        if (Looper.myLooper() == Looper.getMainLooper()) accion.run();
+        else new Handler(Looper.getMainLooper()).post(accion);
+    }
 
     private static final Pattern FAKE_M3U8 = Pattern.compile(
             ".*(check|ping|validate|geo|ad|ads|ima|vast|preroll|tracking|beacon|monitor|heartbeat|blank|empty).*",
@@ -144,7 +179,9 @@ public class StreamResolver {
         Log.d(TAG, "[iframe] Base URL (wrapper): " + wrapperBase);
 
         mainHandler.post(() -> {
+            destruirWebViewsActivos();   // nunca dos a la vez
             WebView webView = new WebView(context);
+            webViewsActivos.add(webView);
             WebSettings settings = webView.getSettings();
             settings.setJavaScriptEnabled(true);
             settings.setDomStorageEnabled(true);
@@ -234,7 +271,9 @@ public class StreamResolver {
         Log.d(TAG, "[injection] Base URL (wrapper): " + wrapperBase);
 
         mainHandler.post(() -> {
+            destruirWebViewsActivos();   // nunca dos a la vez
             WebView webView = new WebView(context);
+            webViewsActivos.add(webView);
             WebSettings settings = webView.getSettings();
             settings.setJavaScriptEnabled(true);
             settings.setDomStorageEnabled(true);
@@ -435,6 +474,7 @@ public class StreamResolver {
     }
 
     private static void destroyInternal(WebView webView) {
+        webViewsActivos.remove(webView);
         try {
             webView.stopLoading();
             webView.loadUrl("about:blank");

@@ -161,6 +161,20 @@ public class PlayerActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_player);
 
+        // ATRÁS (gesto, botón y "predictive back" de Android moderno):
+        // se registra el callback moderno para que nunca se nos escape.
+        try {
+            getOnBackPressedDispatcher().addCallback(this,
+                    new androidx.activity.OnBackPressedCallback(true) {
+                        @Override
+                        public void handleOnBackPressed() {
+                            cerrarReproductor();
+                        }
+                    });
+        } catch (Throwable t) {
+            Log.w(TAG, "No se pudo registrar el callback de atrás: " + t.getMessage());
+        }
+
         // SOLO UN REPRODUCTOR: si quedaba otro abierto (por ejemplo un canal y
         // después una película), se cierra YA para que no se pisen los audios.
         if (instanciaActiva != null && instanciaActiva != this) {
@@ -463,6 +477,10 @@ public class PlayerActivity extends AppCompatActivity {
             }
         } catch (Exception ignored) { }
         abandonarFocoAudio();
+        // Los WebViews ocultos del resolver cargan el embed y su reproductor
+        // arranca solo: si no se destruyen, el audio sigue sonando detrás.
+        try { PelisStreamResolver.destruirWebViewsActivos(); } catch (Throwable ignored) { }
+        try { StreamResolver.destruirWebViewsActivos(); } catch (Throwable ignored) { }
         if (webViewFallback != null) {
             try {
                 webViewFallback.stopLoading();
@@ -1127,6 +1145,8 @@ public class PlayerActivity extends AppCompatActivity {
                     player.setMediaItem(mediaItem);
                     player.prepare();
                     pedirFocoAudio();
+                    try { PelisStreamResolver.destruirWebViewsActivos(); } catch (Throwable ignored) { }
+                    try { StreamResolver.destruirWebViewsActivos(); } catch (Throwable ignored) { }
                     player.setPlayWhenReady(true);
                     streamReady = true;
                     isResolving = false;
@@ -1166,6 +1186,8 @@ public class PlayerActivity extends AppCompatActivity {
             player.setMediaItem(mediaItem);
             player.prepare();
             pedirFocoAudio();
+            try { PelisStreamResolver.destruirWebViewsActivos(); } catch (Throwable ignored) { }
+            try { StreamResolver.destruirWebViewsActivos(); } catch (Throwable ignored) { }
             player.setPlayWhenReady(true);
             streamReady = true;
             isResolving = false;
