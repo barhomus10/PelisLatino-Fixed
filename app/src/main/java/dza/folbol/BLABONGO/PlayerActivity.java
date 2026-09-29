@@ -679,13 +679,18 @@ public class PlayerActivity extends AppCompatActivity {
             hideSystemUI();
             actualizarAccionesPip();
 
-            // La app NO debe seguir visible detrás de la ventanita flotante:
-            // mandamos la tarea al fondo para que solo se vea el vídeo.
+            // La app NO debe seguir visible detrás de la ventanita flotante.
+            // OJO: moveTaskToBack() hacía que el sistema CERRARA el PiP en
+            // algunos móviles, así que en su lugar se cierran las pantallas
+            // que quedan por debajo (sin tocar el reproductor).
             mainHandler.postDelayed(() -> {
                 if (isInPipMode && !isFinishing() && !cerrandoDesdePip) {
-                    try { moveTaskToBack(true); } catch (Exception ignored) { }
+                    try {
+                        BlabongoApp.cerrarTodasExcepto(PlayerActivity.this);
+                        log("PiP: app oculta, solo queda el vídeo flotando");
+                    } catch (Throwable ignored) { }
                 }
-            }, 300);
+            }, 400);
         } else if (!cerrandoDesdePip) {
             // Volvemos a pantalla completa
             restaurarVistasTrasPip();
