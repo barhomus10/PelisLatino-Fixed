@@ -724,7 +724,14 @@ public class PelisStreamResolver {
                 try {
                     Log.i(TAG, "[WebView] creando");
                     System.out.println("[PELIS-DBG] WebView creando");
-                    destruirWebViewsActivos();   // nunca dos a la vez: se cruzaban los audios
+                    // OJO: aqui NO se debe llamar a destruirWebViewsActivos().
+                    // Lo estaba, "para que no hubiera dos a la vez", y es el
+                    // mismo fallo que se corrigio en StreamResolver: si dos
+                    // resoluciones coinciden, la ultima destruye el WebView de
+                    // la anterior y esta nunca encuentra el stream. Los
+                    // WebViews solo se apuntan en la lista; se destruyen al
+                    // cerrar el reproductor (liberarPlayer) o al empezar a
+                    // reproducir, que es cuando ya no hacen falta.
                     WebView wv = new WebView(context);
                     holder[0] = wv;
                     webViewsActivos.add(wv);

@@ -195,8 +195,11 @@ public class PlayerActivity extends AppCompatActivity {
         if (getSupportActionBar() != null) getSupportActionBar().hide();
 
         playerView = findViewById(R.id.playerView);
-        // FIT en vez de FILL: FILL estira el video y lo deforma en pantallas 16:9/18:9
-        playerView.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FIT);
+        // Se vuelve a FILL, que es lo que tenia la app original. (Lo habia
+        // cambiado a FIT por creer que FILL deformaba el video y no es asi:
+        // FILL rellena la pantalla RECORTANDO, manteniendo la proporcion;
+        // FIT es el que deja franjas negras a los lados.)
+        playerView.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FILL);
         playerView.setUseController(false);
 
 
