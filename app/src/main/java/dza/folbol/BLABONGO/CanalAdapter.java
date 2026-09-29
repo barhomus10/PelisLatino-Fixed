@@ -84,8 +84,7 @@ public class CanalAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> 
     }
 
     @OptIn(markerClass = UnstableApi.class) private void lanzarReproductor(String url) {
-        String urlFinal = url.contains("https://belkaperu.github.io/") ? url :
-                "https://belkaperu.github.io/belkafut/repro.html?r=" + extraerToken(url);
+        String urlFinal = normalizarUrlCanal(url);
         Intent intent = new Intent(context, PlayerActivity.class);
         intent.putExtra("url_iframe_inicial", urlFinal);
         if (!(context instanceof android.app.Activity)) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -95,6 +94,33 @@ public class CanalAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> 
     private String extraerToken(String url) {
         if (url.contains("?r=")) return url.substring(url.indexOf("?r=") + 3);
         return url;
+    }
+
+    /**
+     * El JSON de canales no entrega URLs completas, sino rutas como esta:
+     *
+     *   /p/foxrepro1.html?r=https://belkaperu.github.io/belkafut/repron.html?r=<embed>
+     *
+     * Dos problemas:
+     *   1) es una ruta RELATIVA: ni el WebView ni OkHttp saben abrirla.
+     *   2) el envoltorio "/p/*.html" YA NO EXISTE en el servidor del proveedor
+     *      (responde 404 aunque se le ponga la base delante), asi que tampoco
+     *      vale con completarla.
+     *
+     * Lo que si responde 200 es saltarse el envoltorio y abrir directamente la
+     * URL interna que va despues de "?r=", que siempre es absoluta.
+     */
+    String normalizarUrlCanal(String url) {
+        if (url == null) return null;
+        String u = url.trim();
+        if (u.startsWith("http")) return u;
+        int i = u.indexOf("?r=");
+        if (i >= 0) {
+            String interna = u.substring(i + 3).trim();
+            if (interna.startsWith("http")) return interna;
+        }
+        // Ultimo recurso: se le pone la base del sitio del listado.
+        return "https://belkaperu.github.io" + u;
     }
 
     @Override

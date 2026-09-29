@@ -84,8 +84,7 @@ public class BottomSheetOpcionesFragment extends BottomSheetDialogFragment {
 
     @OptIn(markerClass = UnstableApi.class)
     private void lanzarReproductor(String url) {
-        String urlFinal = url.contains("https://belkaperu.github.io/") ? url :
-                "https://belkaperu.github.io/belkafut/repro.html?r=" + extraerToken(url);
+        String urlFinal = normalizarUrlCanal(url);
         Intent intent = new Intent(getActivity(), PlayerActivity.class);
         intent.putExtra("url_iframe_inicial", urlFinal);
         startActivity(intent);
@@ -94,6 +93,23 @@ public class BottomSheetOpcionesFragment extends BottomSheetDialogFragment {
         if (getActivity() != null) {
 
         }
+    }
+
+    /**
+     * Misma normalizacion que en CanalAdapter: las rutas del listado de canales
+     * son relativas ("/p/...") y ese envoltorio ya no existe en el servidor
+     * (404). Se usa directamente la URL interna "?r=" que es absoluta.
+     */
+    private String normalizarUrlCanal(String url) {
+        if (url == null) return null;
+        String u = url.trim();
+        if (u.startsWith("http")) return u;
+        int i = u.indexOf("?r=");
+        if (i >= 0) {
+            String interna = u.substring(i + 3).trim();
+            if (interna.startsWith("http")) return interna;
+        }
+        return "https://belkaperu.github.io" + u;
     }
 
     private String extraerToken(String url) {

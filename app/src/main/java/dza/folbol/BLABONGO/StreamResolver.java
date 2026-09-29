@@ -80,6 +80,14 @@ public class StreamResolver {
             "(https?://[^\\s\"'<>]+\\.m3u8[^\\s\"'<>]*)", Pattern.CASE_INSENSITIVE);
     private static final Pattern IFRAME_SRC = Pattern.compile(
             "<iframe[^>]*src=[\"']([^\"']+)[\"'][^>]*>", Pattern.CASE_INSENSITIVE);
+    /** Recursos que nunca pueden ser un stream. */
+    private static final Pattern RECURSO_ESTATICO = Pattern.compile(
+            ".*\\.(jpg|jpeg|png|gif|webp|bmp|svg|css|woff|woff2|ttf|eot|js|json|xml|ico|mp4|mp3|apk)(\\?|$).*",
+            Pattern.CASE_INSENSITIVE);
+    /** Pinta de playlist/stream, para los CDN que no usan la extension .m3u8. */
+    private static final Pattern PARECE_STREAM = Pattern.compile(
+            "(playlist|stream|live|hls|index|master|mono|chunklist|/vivo/|/channels/|\\.php\\?)",
+            Pattern.CASE_INSENSITIVE);
 
     private static final OkHttpClient httpClient = new OkHttpClient.Builder()
             .connectTimeout(3, TimeUnit.SECONDS)
@@ -223,7 +231,7 @@ public class StreamResolver {
                         return new WebResourceResponse("text/plain", "UTF-8", new ByteArrayInputStream(new byte[0]));
                     }
 
-                    if (url.contains(".m3u8") && isRealStream(url)) {
+                    if (esPlaylistHls(url, request.getRequestHeaders()) && isRealStream(url)) {
                         timeout.removeCallbacks(timeoutAction);
                         synchronized (result) {
                             if (result[0] == null && !destroyed.get()) {
@@ -313,7 +321,7 @@ public class StreamResolver {
                         return new WebResourceResponse("text/plain", "UTF-8", new ByteArrayInputStream(new byte[0]));
                     }
 
-                    if (reqUrl.contains(".m3u8") && isRealStream(reqUrl)) {
+                    if (esPlaylistHls(reqUrl, request.getRequestHeaders()) && isRealStream(reqUrl)) {
                         timeout.removeCallbacks(timeoutAction);
                         synchronized (result) {
                             if (result[0] == null && !destroyed.get()) {
@@ -499,6 +507,58 @@ public class StreamResolver {
     private static String getBaseUrl(String url) {
         try { URL u = new URL(url); return u.getProtocol() + "://" + u.getHost() + "/"; }
         catch (Exception e) { return url; }
+    }
+
+    /**
+     * Hay CDN de deportes que sirven el playlist HLS SIN la extension .m3u8
+     * (por ejemplo: https://.../playlist.php?id=13_&sig=...), asi que el
+     * filtro de siempre ("que la URL contenga .m3u8") se los saltaba y el
+     * canal se quedaba sin stream.
+     *
+     * Si la URL tiene pinta de stream pero no lleva .m3u8, se pide el recurso y
+     * se mira de que es: si el Content-Type es mpegurl o el cuerpo empieza por
+     * #EXTM3U, es el stream aunque la URL no lo diga.
+     */
+    private static boolean esHlsPorContenido(String url, Map<String, String> headers) {
+        if (url == null || !url.startsWith("http")) return false;
+        if (RECURSO_ESTATICO.matcher(url).matches()) return false;
+        if (!PARECE_STREAM.matcher(url).find()) return false;
+        try {
+            Request.Builder b = new Request.Builder().url(url).get()
+                    .header("Range", "bytes=0-1023")
+                    .header("User-Agent", DESKTOP_USER_AGENT);
+            if (headers != null) {
+                String ref = headers.get("Referer");
+                if (ref != null && !ref.isEmpty()) b.header("Referer", ref);
+                String ck = headers.get("Cookie");
+                if (ck != null && !ck.isEmpty()) b.header("Cookie", ck);
+            }
+            Response r = httpClient.newCall(b.build()).execute();
+            try {
+                if (r == null || !r.isSuccessful()) return false;
+                String ct = r.header("Content-Type");
+                if (ct != null) {
+                    String ctl = ct.toLowerCase();
+                    if (ctl.contains("mpegurl") || ctl.contains("x-mpeg")) return true;
+                }
+                if (r.body() == null) return false;
+                long len = r.body().contentLength();
+                if (len > 512 * 1024) return false;   // demasiado grande para ser un playlist
+                String txt = r.body().string();
+                return txt != null && txt.trim().startsWith("#EXTM3U");
+            } finally {
+                try { r.close(); } catch (Throwable ignored) { }
+            }
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** Acepta tanto el .m3u8 de siempre como los playlists sin extension. */
+    private static boolean esPlaylistHls(String url, Map<String, String> headers) {
+        if (url == null) return false;
+        if (url.contains(".m3u8")) return true;
+        return esHlsPorContenido(url, headers);
     }
 
     private static boolean isRealStream(String url) {
