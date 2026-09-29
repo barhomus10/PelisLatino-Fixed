@@ -82,5 +82,14 @@
             android:src="@drawable/ic_pip"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="Picture-in-Picture" />
+
+        <!-- Cerrar el reproductor (para el audio y sale) -->
+        <ImageButton
+            android:id="@+id/btnCerrar"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:src="@drawable/ic_cerrar"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Cerrar" />
     </LinearLayout>
 </LinearLayout>

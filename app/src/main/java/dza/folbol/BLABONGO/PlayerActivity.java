@@ -6,6 +6,8 @@ import android.app.PictureInPictureParams;
 import android.app.RemoteAction;
 import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.media.AudioFocusRequest;
+import android.media.AudioManager;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
@@ -24,6 +26,7 @@ import android.util.Log;
 import android.util.Rational;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
@@ -64,9 +67,11 @@ import java.io.IOException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -107,7 +112,7 @@ public class PlayerActivity extends AppCompatActivity {
 
     // --- Controles personalizados ---
     private View controlsOverlay;
-    private ImageButton btnPlayPause, btnRewind, btnForward, btnVolume, btnRefresh, btnPip;
+    private ImageButton btnPlayPause, btnRewind, btnForward, btnVolume, btnRefresh, btnPip, btnCerrar;
     private SeekBar seekBar;
     private boolean isSeeking = false;
     private final Handler seekHandler = new Handler(Looper.getMainLooper());
@@ -118,6 +123,23 @@ public class PlayerActivity extends AppCompatActivity {
     private boolean entrandoEnPip = false;   // true entre enterPictureInPictureMode() y onPictureInPictureModeChanged()
     private boolean cerrandoDesdePip = false;
     private BroadcastReceiver pipReceiver;
+
+    // --- Un solo reproductor vivo a la vez + foco de audio ---
+    /** Instancia del reproductor abierta ahora mismo (null = ninguna). */
+    private static PlayerActivity instanciaActiva = null;
+    private AudioManager audioManager = null;
+    private AudioFocusRequest peticionFoco = null;
+    private final AudioManager.OnAudioFocusChangeListener focoListener = cambio -> {
+        if (cambio == AudioManager.AUDIOFOCUS_LOSS
+                || cambio == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
+            // Otra app (u otro reproductor) quiere el audio: nosotros callamos.
+            if (player != null && !isInPipMode) {
+                try { player.pause(); } catch (Exception ignored) { }
+            }
+        }
+    };
+    /** Vistas ocultadas al entrar en PiP -> se restauran al salir. */
+    private final Map<View, Integer> visibilidadPrePip = new LinkedHashMap<>();
 
     private static final String ACTION_PIP_CONTROL = "dza.folbol.BLABONGO.PIP_CONTROL";
     private static final String EXTRA_PIP_ACTION = "pip_action";
@@ -138,6 +160,14 @@ public class PlayerActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_player);
+
+        // SOLO UN REPRODUCTOR: si quedaba otro abierto (por ejemplo un canal y
+        // después una película), se cierra YA para que no se pisen los audios.
+        if (instanciaActiva != null && instanciaActiva != this) {
+            log("⏹ Cerrando el reproductor anterior para que no se crucen los audios");
+            instanciaActiva.cerrarReproductor();
+        }
+        instanciaActiva = this;
 
         // Forzar orientación landscape (siempre horizontal)
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
@@ -188,6 +218,7 @@ public class PlayerActivity extends AppCompatActivity {
         btnVolume = findViewById(R.id.btnVolume);
         btnRefresh = findViewById(R.id.btnRefresh);
         btnPip = findViewById(R.id.btnPip);
+        btnCerrar = findViewById(R.id.btnCerrar);
         seekBar = findViewById(R.id.seekBar);
 
         // Play/Pause
@@ -259,6 +290,14 @@ public class PlayerActivity extends AppCompatActivity {
             }
             resetControlsTimeout();
         });
+
+        // Cerrar: corta el audio y sale del reproductor
+        if (btnCerrar != null) {
+            btnCerrar.setOnClickListener(v -> {
+                log("⏹ Botón cerrar pulsado");
+                cerrarReproductor();
+            });
+        }
 
         // SeekBar
         seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
@@ -385,16 +424,91 @@ public class PlayerActivity extends AppCompatActivity {
 
     @Override
     public void onBackPressed() {
-        // ANTES: si estaba reproduciendo volvia a entrar en PiP -> nunca se cerraba.
-        if (isInPipMode || entrandoEnPip) {
-            cerrarDesdePip();
-            return;
+        // ATRÁS SIEMPRE CIERRA el reproductor y corta el audio.
+        // Antes, si estaba reproduciendo, volvía a entrar en PiP y no había
+        // forma de salir. Para la ventanita flotante está el botón PiP o el
+        // botón de inicio (que sí puede entrar en PiP).
+        cerrarReproductor();
+    }
+
+    /**
+     * Cierra el reproductor de verdad: para el audio, libera ExoPlayer, suelta
+     * el foco de audio y termina la Activity.
+     */
+    protected void cerrarReproductor() {
+        log("⏹ Cerrando reproductor");
+        cerrandoDesdePip = true;
+        liberarPlayer();
+        if (instanciaActiva == this) instanciaActiva = null;
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) finishAndRemoveTask();
+            else finish();
+        } catch (Exception e) {
+            try { finish(); } catch (Exception ignored) { }
         }
-        if (soportaPip() && hayVideoNativo() && player != null && player.isPlaying()) {
-            entrarEnPip();       // atras con el video en marcha -> ventana flotante
-        } else {
-            super.onBackPressed();   // -> finish()
+    }
+
+    /**
+     * Corta el audio de raíz: para la reproducción, libera el reproductor y
+     * suelta el foco de audio. Se llama al cerrar y al abrir otro reproductor,
+     * para que nunca queden dos sonando a la vez.
+     */
+    protected void liberarPlayer() {
+        try {
+            if (player != null) {
+                try { player.setPlayWhenReady(false); } catch (Exception ignored) { }
+                try { player.stop(); } catch (Exception ignored) { }
+                try { player.release(); } catch (Exception ignored) { }
+                player = null;
+            }
+        } catch (Exception ignored) { }
+        abandonarFocoAudio();
+        if (webViewFallback != null) {
+            try {
+                webViewFallback.stopLoading();
+                webViewFallback.loadUrl("about:blank");
+            } catch (Exception ignored) { }
         }
+    }
+
+    /** Pide el foco de audio: si otra app está sonando, la calla. */
+    @SuppressWarnings("deprecation")
+    private void pedirFocoAudio() {
+        try {
+            if (audioManager == null) {
+                audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+            }
+            if (audioManager == null) return;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                if (peticionFoco == null) {
+                    android.media.AudioAttributes attrs =
+                            new android.media.AudioAttributes.Builder()
+                                    .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MOVIE)
+                                    .build();
+                    peticionFoco = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                            .setAudioAttributes(attrs)
+                            .setOnAudioFocusChangeListener(focoListener)
+                            .build();
+                }
+                audioManager.requestAudioFocus(peticionFoco);
+            } else {
+                audioManager.requestAudioFocus(focoListener, AudioManager.STREAM_MUSIC,
+                        AudioManager.AUDIOFOCUS_GAIN);
+            }
+        } catch (Exception ignored) { }
+    }
+
+    @SuppressWarnings("deprecation")
+    private void abandonarFocoAudio() {
+        if (audioManager == null) return;
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                if (peticionFoco != null) audioManager.abandonAudioFocusRequest(peticionFoco);
+            } else {
+                audioManager.abandonAudioFocus(focoListener);
+            }
+        } catch (Exception ignored) { }
     }
 
     private void entrarEnPip() {
@@ -527,23 +641,10 @@ public class PlayerActivity extends AppCompatActivity {
         updatePlayPauseButton();
     }
 
-    /** Cierra de verdad el reproductor estando en PiP (antes no habia forma). */
+    /** Cierra de verdad el reproductor estando en PiP (botón X de la ventanita). */
     private void cerrarDesdePip() {
         log("⏹ Cerrando reproductor desde PiP");
-        cerrandoDesdePip = true;
-        try {
-            if (player != null) {
-                player.stop();
-                player.release();
-                player = null;
-            }
-        } catch (Exception ignored) { }
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) finishAndRemoveTask();
-            else finish();
-        } catch (Exception e) {
-            finish();
-        }
+        cerrarReproductor();
     }
 
     @Override
@@ -553,25 +654,59 @@ public class PlayerActivity extends AppCompatActivity {
         isInPipMode = isInPictureInPictureMode;
         entrandoEnPip = false;
         if (isInPictureInPictureMode) {
-            // En PiP solo se ve el video: fuera controles y panel de depuracion
-            if (controlsOverlay != null) {
-                controlsOverlay.setVisibility(View.GONE);
-                stopSeekUpdate();
-            }
-            if (playerView != null) {
-                playerView.hideController();
-                playerView.setUseController(false);
-            }
-            if (tvDebugLog != null) tvDebugLog.setVisibility(View.GONE);
-            if (scrollDebugLog != null) scrollDebugLog.setVisibility(View.GONE);
+            // En PiP SOLO se ve el vídeo: se oculta absolutamente todo lo demás
+            // (controles, panel de depuración, WebView, anuncios...).
+            ocultarTodoMenosElVideo();
+            stopSeekUpdate();
             hideSystemUI();
             actualizarAccionesPip();
+
+            // La app NO debe seguir visible detrás de la ventanita flotante:
+            // mandamos la tarea al fondo para que solo se vea el vídeo.
+            mainHandler.postDelayed(() -> {
+                if (isInPipMode && !isFinishing() && !cerrandoDesdePip) {
+                    try { moveTaskToBack(true); } catch (Exception ignored) { }
+                }
+            }, 300);
         } else if (!cerrandoDesdePip) {
             // Volvemos a pantalla completa
+            restaurarVistasTrasPip();
             hideSystemUI();
             showControls();
             aplicarParamsPip();
         }
+    }
+
+    /** Oculta TODO menos el vídeo: en PiP no debe verse nada de la app. */
+    private void ocultarTodoMenosElVideo() {
+        visibilidadPrePip.clear();
+        View root = findViewById(android.R.id.content);
+        if (root instanceof ViewGroup) ocultarRecursivo((ViewGroup) root);
+        if (playerView != null) {
+            playerView.hideController();
+            playerView.setUseController(false);
+        }
+        if (tvDebugLog != null) tvDebugLog.setVisibility(View.GONE);
+        if (scrollDebugLog != null) scrollDebugLog.setVisibility(View.GONE);
+    }
+
+    /** Oculta en cascada todo lo que no sea el PlayerView. */
+    private void ocultarRecursivo(ViewGroup grupo) {
+        for (int i = 0; i < grupo.getChildCount(); i++) {
+            View v = grupo.getChildAt(i);
+            if (v == playerView) continue;      // ni el vídeo ni lo que contiene
+            visibilidadPrePip.put(v, v.getVisibility());
+            if (v.getVisibility() != View.GONE) v.setVisibility(View.GONE);
+            if (v instanceof ViewGroup) ocultarRecursivo((ViewGroup) v);
+        }
+    }
+
+    /** Devuelve cada vista al estado que tenía antes de entrar en PiP. */
+    private void restaurarVistasTrasPip() {
+        for (Map.Entry<View, Integer> e : visibilidadPrePip.entrySet()) {
+            if (e.getKey() != null) e.getKey().setVisibility(e.getValue() == null ? View.VISIBLE : e.getValue());
+        }
+        visibilidadPrePip.clear();
     }
 
     // --------------- CICLO DE VIDA ---------------
@@ -621,9 +756,13 @@ public class PlayerActivity extends AppCompatActivity {
         // ANTES: aqui se liberaba el player al ir a segundo plano, asi que al
         // volver la pantalla quedaba en negro. Solo liberamos si la Activity se
         // esta destruyendo de verdad (y nunca mientras estamos en PiP).
-        if (!isInPipMode && !entrandoEnPip && !estaEnPipSistema() && isFinishing() && player != null) {
-            try { player.release(); } catch (Exception ignored) { }
-            player = null;
+        if (!isInPipMode && !entrandoEnPip && !estaEnPipSistema()) {
+            if (player != null) {
+                try { player.pause(); } catch (Exception ignored) { }
+                // Si la Activity se está cerrando de verdad, se libera YA para
+                // que no quede ningún audio sonando.
+                if (isFinishing()) liberarPlayer();
+            }
         }
         super.onStop();
     }
@@ -637,10 +776,8 @@ public class PlayerActivity extends AppCompatActivity {
         if (executorService != null) {
             executorService.shutdownNow();
         }
-        if (player != null) {
-            try { player.release(); } catch (Exception ignored) { }
-            player = null;
-        }
+        liberarPlayer();
+        if (instanciaActiva == this) instanciaActiva = null;
         if (webViewFallback != null) {
             webViewFallback.stopLoading();
             webViewFallback.loadUrl("about:blank");
@@ -989,6 +1126,7 @@ public class PlayerActivity extends AppCompatActivity {
                     MediaItem mediaItem = new MediaItem.Builder().setUri(Uri.parse(url)).build();
                     player.setMediaItem(mediaItem);
                     player.prepare();
+                    pedirFocoAudio();
                     player.setPlayWhenReady(true);
                     streamReady = true;
                     isResolving = false;
@@ -1027,6 +1165,7 @@ public class PlayerActivity extends AppCompatActivity {
             MediaItem mediaItem = new MediaItem.Builder().setUri(Uri.parse(url)).build();
             player.setMediaItem(mediaItem);
             player.prepare();
+            pedirFocoAudio();
             player.setPlayWhenReady(true);
             streamReady = true;
             isResolving = false;
