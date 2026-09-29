@@ -24,9 +24,12 @@ import com.bumptech.glide.Glide;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Detalle de una película o serie, con acceso a la reproducción.
@@ -53,6 +56,8 @@ public class PelisDetailActivity extends AppCompatActivity {
     private ImageView imgBackdrop, imgPoster;
     private TextView txtTitulo, txtMeta, txtTipo, txtSinopsis, txtEstado;
     private Button btnReproducir;
+    /** Momento en que arrancó la búsqueda del mejor servidor (cadena). */
+    private long inicioCadena = 0L;
     private ProgressBar progress;
     private LinearLayout contenedorEpisodios;
     private Spinner spinnerTemporadas;
@@ -237,34 +242,109 @@ public class PelisDetailActivity extends AppCompatActivity {
         });
     }
 
+    /**
+     * ORDEN DE SERVIDORES PARA QUE LAS PELIS SALGAN EN ESPAÑOL.
+     *
+     * Comprobado en vivo (2026-09-28):
+     *   - vimeus  (alt)  -> el propio JSON anuncia lang "Latino" y el master HLS
+     *                       declara NAME="Español", LANGUAGE="es", DEFAULT=YES  ✅ 1º
+     *   - embed69 (alt1) -> copias LAT (latino) / ESP (castellano), resueltas con
+     *                       PoW + AES-CBC + JsUnpacker                             2º
+     *   - vsembed (alt3) -> copias YIFY/YTS en INGLÉS, sin pista en español
+     *                       ni subtítulos (por eso antes sonaban en inglés)        ⚠️ último
+     */
+    private List<Integer> ordenServidores(List<String> nombres, List<String> urls) {
+        int[] prio = new int[urls.size()];
+        for (int i = 0; i < urls.size(); i++) {
+            String k = (nombres.get(i) == null ? "" : nombres.get(i)).toLowerCase(Locale.US);
+            String u = (urls.get(i) == null ? "" : urls.get(i)).toLowerCase(Locale.US);
+            if (u.contains("vimeus") || k.equals("alt")) prio[i] = 0;         // LATINO (audio es)
+            else if (u.contains("embed69") || k.equals("alt1")) prio[i] = 1;  // MULTI (LAT/ESP)
+            else if (u.contains("vsembed") || k.equals("alt3")) prio[i] = 3;  // INGLÉS
+            else prio[i] = 2;
+        }
+        List<Integer> orden = new ArrayList<>();
+        for (int p = 0; p <= 3; p++) {
+            for (int i = 0; i < urls.size(); i++) if (prio[i] == p) orden.add(i);
+        }
+        return orden;
+    }
+
     private void elegirServidor(final PelisResolver.Servidores servidores) {
         final List<String> nombres = new ArrayList<>(servidores.opciones.keySet());
         final List<String> urls = new ArrayList<>(servidores.opciones.values());
 
-        // MEJORA 2026-09-28: auto-selección del servidor en español.
-        // PelisResolver ya ordena primero las opciones con vsembed / ds_lang=es,
-        // y es el único camino verificado (WASM + Token -> master.m3u8).
-        // Los demás (vimeus, embed69) suelen caer en Cloudflare 522, así que
-        // evitamos preguntar y conectamos directo. Si no hay opción en español
-        // se mantiene el diálogo de siempre.
-        for (int i = 0; i < urls.size(); i++) {
-            String u = urls.get(i);
-            if (u != null && (u.contains("vsembed") || u.contains("ds_lang=es"))) {
-                Log.d(TAG, "Servidor automático (español): " + nombres.get(i));
-                txtEstado.setText("Conectando con el servidor en español…");
-                resolverYReproducir(u);
-                return;
-            }
+        if (urls.isEmpty()) {
+            txtEstado.setText("Sin servidores disponibles");
+            return;
         }
-
         if (urls.size() == 1) {
             resolverYReproducir(urls.get(0));
             return;
         }
+        // Varios servidores: se prueban EN ORDEN DE IDIOMA y gana el primero que
+        // realmente resuelve un m3u8. Si ninguno puede, se muestra el diálogo.
+        final List<Integer> orden = ordenServidores(nombres, urls);
+        inicioCadena = System.currentTimeMillis();
+        probarServidor(nombres, urls, orden, 0);
+    }
 
+    private void probarServidor(final List<String> nombres, final List<String> urls,
+                                final List<Integer> orden, final int idx) {
+        if (idx >= orden.size()) {
+            btnReproducir.setEnabled(true);
+            txtEstado.setText("Ningún servidor respondió. Elige uno:");
+            mostrarDialogoServidores(nombres, urls);
+            return;
+        }
+        final int i = orden.get(idx);
+        final String url = urls.get(i);
+        final String nombre = nombres.get(i);
+
+        // Presupuesto global: si llevamos demasiado tiempo buscando español,
+        // pasamos al último servidor de la lista para que el usuario no espere.
+        if (idx > 0 && System.currentTimeMillis() - inicioCadena > 60_000) {
+            Log.w(TAG, "Presupuesto de la cadena agotado; abriendo el embed directamente");
+            txtEstado.setText("Abriendo player del servidor…");
+            abrirReproductorConEmbed(urls.get(orden.get(orden.size() - 1)));
+            return;
+        }
+
+        btnReproducir.setEnabled(false);
+        txtEstado.setText("Probando " + PelisResolver.etiqueta(nombre) + "…");
+        Log.d(TAG, "[servidor " + (idx + 1) + "/" + orden.size() + "] " + nombre + " -> " + url);
+
+        executorService.execute(() -> {
+            PelisStreamResolver.StreamResult sr = null;
+            try {
+                sr = resolverConLimite(url, 25_000);
+            } catch (Throwable t) {
+                Log.w(TAG, "Falló " + nombre + ": " + t.getMessage());
+            }
+            final PelisStreamResolver.StreamResult finalSr = sr;
+            runOnUiThread(() -> {
+                if (isFinishing()) return;
+                if (finalSr != null && finalSr.m3u8Url != null && !finalSr.m3u8Url.isEmpty()) {
+                    Log.d(TAG, "Servidor OK (" + nombre + "): " + finalSr.m3u8Url);
+                    btnReproducir.setEnabled(true);
+                    M3u8PelisResolver.M3u8Result listo = new M3u8PelisResolver.M3u8Result();
+                    listo.m3u8Url = finalSr.m3u8Url;
+                    listo.cookies = finalSr.cookies;
+                    listo.referer = finalSr.referer;
+                    listo.origin = finalSr.origin;
+                    listo.headers = finalSr.headers;
+                    txtEstado.setText("▶ " + PelisResolver.etiqueta(nombre));
+                    abrirReproductorConStream(listo);
+                } else {
+                    probarServidor(nombres, urls, orden, idx + 1);
+                }
+            });
+        });
+    }
+
+    private void mostrarDialogoServidores(final List<String> nombres, final List<String> urls) {
         String[] etiquetas = new String[nombres.size()];
         for (int i = 0; i < nombres.size(); i++) etiquetas[i] = PelisResolver.etiqueta(nombres.get(i));
-
         new AlertDialog.Builder(this)
                 .setTitle("Elige un servidor")
                 .setItems(etiquetas, (d, which) -> resolverYReproducir(urls.get(which)))
@@ -272,16 +352,51 @@ public class PelisDetailActivity extends AppCompatActivity {
                 .show();
     }
 
+    /** Cada URL va al resolver que le corresponde. */
+    private PelisStreamResolver.StreamResult resolverServidorUrl(String url) throws Exception {
+        if (VimeusResolver.isVimeus(url)) {
+            Log.d(TAG, "Resolviendo con VimeusResolver (pista de audio Español)");
+            return VimeusResolver.resolve(getApplicationContext(), url);
+        }
+        if (Embed69Resolver.isEmbed69(url)) {
+            Log.d(TAG, "Resolviendo con Embed69Resolver (copia LAT/ESP)");
+            return Embed69Resolver.resolve(getApplicationContext(), url);
+        }
+        return PelisStreamResolver.resolveSynchronously(getApplicationContext(), url);
+    }
+
+    /**
+     * Ningún servidor puede colgarse más de <code>millis</code> ms.
+     *
+     * Se hacen DOS intentos: estos servidores devuelven errores puntuales
+     * (rate-limit, TLS) y sin reintento se acabaría cayendo al servidor en
+     * inglés por un fallo que no es real.
+     */
+    private PelisStreamResolver.StreamResult resolverConLimite(final String url, long millis)
+            throws Exception {
+        Exception ultima = null;
+        for (int intento = 1; intento <= 2; intento++) {
+            ExecutorService tmp = Executors.newSingleThreadExecutor();
+            try {
+                Future<PelisStreamResolver.StreamResult> f = tmp.submit(() -> resolverServidorUrl(url));
+                return f.get(millis, TimeUnit.MILLISECONDS);
+            } catch (Exception e) {
+                ultima = e;
+                Log.w(TAG, "Intento " + intento + " falló (" + e.getMessage() + "); reintentando…");
+                try { Thread.sleep(700); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+            } finally {
+                tmp.shutdownNow();
+            }
+        }
+        throw ultima != null ? ultima : new Exception("servidor no disponible");
+    }
+
     /**
      * Toma la URL de un servidor (normalmente un iframe embed) y la resuelve
-     * con PelisStreamResolver para obtener el m3u8 real antes de abrir el
-     * reproductor nativo.
+     * para obtener el m3u8 real antes de abrir el reproductor nativo.
      *
-     * Si la resolución falla (players cross-origin protegidos como vsembed,
-     * cuyo stream vive dentro de un iframe de otro dominio y no se puede
-     * interceptar por Same-Origin Policy), se abre el reproductor nativo en
-     * modo WebView cargando el propio embed. Así el usuario ve el player
-     * real a pantalla completa en vez de un error.
+     * Si la resolución falla (players protegidos, cross-origin...), se abre el
+     * reproductor nativo en modo WebView cargando el propio embed.
      */
     private void resolverYReproducir(final String url) {
         btnReproducir.setEnabled(false);
@@ -291,9 +406,9 @@ public class PelisDetailActivity extends AppCompatActivity {
         executorService.execute(() -> {
             PelisStreamResolver.StreamResult sr = null;
             try {
-                sr = PelisStreamResolver.resolveSynchronously(getApplicationContext(), url);
+                sr = resolverConLimite(url, 25_000);
             } catch (Throwable t) {
-                Log.e(TAG, "PelisStreamResolver lanzó excepción: " + t.getMessage(), t);
+                Log.e(TAG, "El resolver lanzó excepción: " + t.getMessage(), t);
             }
 
             final PelisStreamResolver.StreamResult finalSr = sr;
@@ -311,9 +426,6 @@ public class PelisDetailActivity extends AppCompatActivity {
                     txtEstado.setText("✅ Stream listo");
                     abrirReproductorConStream(listo);
                 } else {
-                    // Fallback: no se pudo extraer el m3u8 (iframe cross-origin,
-                    // challenge JS, etc.). Abrimos el embed directamente en el
-                    // reproductor para que el usuario vea el player real.
                     Log.w(TAG, "No se pudo extraer el m3u8; abriendo embed en el reproductor: " + url);
                     txtEstado.setText("Abriendo player del servidor…");
                     abrirReproductorConEmbed(url);

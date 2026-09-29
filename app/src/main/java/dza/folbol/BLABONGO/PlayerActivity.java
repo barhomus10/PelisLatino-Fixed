@@ -689,6 +689,20 @@ public class PlayerActivity extends AppCompatActivity {
                 .build();
         playerView.setPlayer(player);
 
+        // AUDIO EN ESPAÑOL: si el stream trae varias pistas de audio (vimeus
+        // publica p.ej. "Español"/"es" + "한국어"/"ko"), se fuerza español.
+        try {
+            player.setTrackSelectionParameters(
+                    player.getTrackSelectionParameters()
+                            .buildUpon()
+                            .setPreferredAudioLanguage("spa")
+                            .setPreferredAudioRoleFlags(0)
+                            .build());
+            log("Pista de audio preferida: español (spa)");
+        } catch (Throwable t) {
+            Log.w(TAG, "No se pudo fijar el idioma de audio preferido: " + t.getMessage());
+        }
+
         player.addListener(new Player.Listener() {
             @Override
             public void onPlayerError(PlaybackException error) {
@@ -829,6 +843,36 @@ public class PlayerActivity extends AppCompatActivity {
      * así que antes el reproductor caía al modo WebView aunque sí había stream.
      */
     private StreamResolver.StreamResult resolverInteligente(String url) throws Exception {
+        // vimeus = el servidor LATINO (audio en español): resolver nativo, sin WebView.
+        if (url != null && VimeusResolver.isVimeus(url)) {
+            log("Usando VimeusResolver (Latino)...");
+            try {
+                PelisStreamResolver.StreamResult pr =
+                        VimeusResolver.resolve(PlayerActivity.this, url);
+                if (pr != null && pr.m3u8Url != null && !pr.m3u8Url.isEmpty()) {
+                    log("✅ VimeusResolver devolvió master HLS en español");
+                    return new StreamResolver.StreamResult(pr.m3u8Url, pr.cookies,
+                            pr.referer, pr.origin, pr.headers);
+                }
+            } catch (Throwable t) {
+                log("⚠️ VimeusResolver falló: " + t.getMessage());
+            }
+        }
+        // embed69 = copias LAT/ESP con PoW+AES: resolver nativo, sin WebView.
+        if (url != null && Embed69Resolver.isEmbed69(url)) {
+            log("Usando Embed69Resolver (LAT/ESP)...");
+            try {
+                PelisStreamResolver.StreamResult pr =
+                        Embed69Resolver.resolve(PlayerActivity.this, url);
+                if (pr != null && pr.m3u8Url != null && !pr.m3u8Url.isEmpty()) {
+                    log("✅ Embed69Resolver devolvió master HLS");
+                    return new StreamResolver.StreamResult(pr.m3u8Url, pr.cookies,
+                            pr.referer, pr.origin, pr.headers);
+                }
+            } catch (Throwable t) {
+                log("⚠️ Embed69Resolver falló: " + t.getMessage());
+            }
+        }
         if (url != null && (url.contains("vsembed") || url.contains("ds_lang=es")
                 || url.contains("cloudorchestranova"))) {
             log("Usando PelisStreamResolver (vsembed WASM+Token)...");
