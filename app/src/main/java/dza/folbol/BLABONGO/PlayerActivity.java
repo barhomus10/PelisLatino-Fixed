@@ -707,12 +707,21 @@ public class PlayerActivity extends AppCompatActivity {
             hideSystemUI();
             actualizarAccionesPip();
 
-            // Comportamiento estándar de Android (YouTube, Chrome...): la app
-            // sigue abierta detrás y la ventanita flota encima.
-            // OJO: no mover la tarea al fondo (moveTaskToBack) ni cerrar las
-            // pantallas de detrás: moveTaskToBack() apaga el PiP en algunos
-            // móviles y cerrarlas hacía que la app se cerrara del todo.
-            log("PiP: ventanita flotando, solo el vídeo");
+            // Comportamiento ESTÁNDAR de Android: al entrar en PiP el SISTEMA
+            // esconde la aplicación y solo se ve la ventanita flotante.
+            // moveTaskToBack() manda la tarea al fondo SIN destruir nada, así
+            // que al cerrar el PiP la app vuelve a pantalla completa tal cual.
+            // (Ojo: NO vale cerrar las Activities de detrás: eso sí cerraba la
+            // app del todo y ya no se podía restaurar.)
+            mainHandler.postDelayed(() -> {
+                if (!isInPipMode || isFinishing() || cerrandoDesdePip) return;
+                try {
+                    moveTaskToBack(true);
+                    log("PiP: app al fondo, solo la ventanita flotante");
+                } catch (Throwable t) {
+                    log("⚠️ No se pudo mandar la app al fondo: " + t.getMessage());
+                }
+            }, 400);
             try {
                 String info = "PiP · nativo=" + hayVideoNativo()
                         + (player != null ? ", playing=" + player.isPlaying() : ", player=null");
