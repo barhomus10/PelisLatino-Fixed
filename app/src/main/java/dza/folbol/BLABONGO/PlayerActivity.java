@@ -146,7 +146,8 @@ public class PlayerActivity extends AppCompatActivity {
     private static final String ACTION_PIP_CONTROL = "dza.folbol.BLABONGO.PIP_CONTROL";
     private static final String EXTRA_PIP_ACTION = "pip_action";
     private static final int PIP_ACTION_PLAY_PAUSE = 1;
-    private static final int PIP_ACTION_CLOSE = 2;
+    private static final int PIP_ACTION_FULLSCREEN = 2;   // salir del PiP y volver a pantalla completa
+    private static final String ACTION_SALIR_PIP = "dza.folbol.BLABONGO.SALIR_PIP";
 
     // Auto-ocultar controles
     private static final long CONTROLS_TIMEOUT = 4000; // 4 segundos
@@ -638,11 +639,16 @@ public class PlayerActivity extends AppCompatActivity {
                 reproduciendo ? "Pausar" : "Reproducir",
                 reproduciendo ? "Pausar" : "Reproducir",
                 pendingIntentPip(PIP_ACTION_PLAY_PAUSE)));
+        // Ojo: aqui ANTES habia un boton "Cerrar" (icono de X) que cerraba el
+        // reproductor y borraba la tarea. La gente lo pulsaba para volver a
+        // pantalla completa y se le cerraba todo. Ahora este boton SACA del
+        // PiP y devuelve la app a pantalla completa; para cerrar del todo
+        // esta el boton ATRAS una vez fuera del PiP.
         acciones.add(new RemoteAction(
-                Icon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel),
-                "Cerrar",
-                "Cierra el reproductor y sale de PiP",
-                pendingIntentPip(PIP_ACTION_CLOSE)));
+                Icon.createWithResource(this, android.R.drawable.ic_menu_view),
+                "Pantalla completa",
+                "Sale del PiP y vuelve a pantalla completa",
+                pendingIntentPip(PIP_ACTION_FULLSCREEN)));
         return acciones;
     }
 
@@ -663,8 +669,8 @@ public class PlayerActivity extends AppCompatActivity {
                 if (accion == PIP_ACTION_PLAY_PAUSE) {
                     alternarPlayPause();
                     actualizarAccionesPip();
-                } else if (accion == PIP_ACTION_CLOSE) {
-                    cerrarDesdePip();
+                } else if (accion == PIP_ACTION_FULLSCREEN) {
+                    salirDePip();
                 }
             }
         };
@@ -687,10 +693,26 @@ public class PlayerActivity extends AppCompatActivity {
         updatePlayPauseButton();
     }
 
-    /** Cierra de verdad el reproductor estando en PiP (botón X de la ventanita). */
-    private void cerrarDesdePip() {
-        log("⏹ Cerrando reproductor desde PiP");
-        cerrarReproductor();
+    /**
+     * Saca la app del PiP y la devuelve a pantalla completa (botón de la
+     * ventanita flotante).
+     *
+     * No existe una llamada directa para salir del modo PiP: lo que lo saca es
+     * traer la tarea al frente con REORDER_TO_FRONT. El intent lleva una marca
+     * (ACTION_SALIR_PIP) para que onNewIntent sepa que no es un título nuevo y
+     * no toque ni el intent original ni el stream que está sonando.
+     */
+    private void salirDePip() {
+        log("⤢ Saliendo del PiP: vuelta a pantalla completa");
+        try {
+            Intent volver = new Intent(this, PlayerActivity.class);
+            volver.setAction(ACTION_SALIR_PIP);
+            volver.setFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                    | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            startActivity(volver);
+        } catch (Throwable t) {
+            log("⚠️ No se pudo salir del PiP: " + t.getMessage());
+        }
     }
 
     @Override
@@ -782,12 +804,7 @@ public class PlayerActivity extends AppCompatActivity {
      */
     private void traerAppAlFrente() {
         if (isInPipMode || isFinishing() || cerrandoDesdePip) return;
-        try {
-            Intent traer = new Intent(this, PlayerActivity.class);
-            traer.setFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-                    | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-            startActivity(traer);
-        } catch (Throwable ignored) { }
+        salirDePip();
     }
 
     /**
@@ -854,8 +871,16 @@ public class PlayerActivity extends AppCompatActivity {
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
-        setIntent(intent);
         if (intent == null) return;
+        // Marca interna para salir del PiP: NO es un título nuevo, así que no
+        // se toca el intent original (si lo reemplazáramos se perdería la URL
+        // del stream que está sonando).
+        if (ACTION_SALIR_PIP.equals(intent.getAction())) {
+            cerrandoDesdePip = false;
+            asegurarPlayer();
+            return;
+        }
+        setIntent(intent);
         // Venimos de cerrar o de otra película: se limpia cualquier resolución
         // anterior y se garantiza que el reproductor existe.
         isResolving = false;
