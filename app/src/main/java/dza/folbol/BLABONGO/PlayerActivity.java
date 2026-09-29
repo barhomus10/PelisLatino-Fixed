@@ -124,6 +124,8 @@ public class PlayerActivity extends AppCompatActivity {
     private boolean isInPipMode = false;
     private boolean entrandoEnPip = false;   // true entre enterPictureInPictureMode() y onPictureInPictureModeChanged()
     private boolean cerrandoDesdePip = false;
+    private boolean enPrimerPlano = true;   // la app se ve (onResume) o esta detras (onStop)
+    private int intentosTraerAlFrente = 0;
     private BroadcastReceiver pipReceiver;
 
     // --- Un solo reproductor vivo a la vez + foco de audio ---
@@ -704,11 +706,41 @@ public class PlayerActivity extends AppCompatActivity {
      */
     private void salirDePip() {
         log("⤢ Saliendo del PiP: vuelta a pantalla completa");
+        Intent volver = new Intent(this, PlayerActivity.class);
+        volver.setAction(ACTION_SALIR_PIP);
+        volver.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        // CLAVE: esta Activity es launchMode="singleTask", y en ese modo
+        // lanzar el intent desde la propia Activity NO trae la app al primer
+        // plano (se queda detras del escritorio y parece que se ha cerrado
+        // todo). Hay que lanzarlo desde el contexto de la APLICACION.
         try {
-            Intent volver = new Intent(this, PlayerActivity.class);
-            volver.setAction(ACTION_SALIR_PIP);
-            volver.setFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-                    | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            android.content.Context ctx = getApplicationContext();
+            if (ctx == null) ctx = this;
+            ctx.startActivity(volver);
+            return;
+        } catch (Throwable t) {
+            log("⚠️ Reintento para volver al primer plano: " + t.getMessage());
+        }
+        // Plan B (Android 14+): desde segundo plano el sistema puede bloquear
+        // el arranque; con un PendingIntent con permiso explícito se permite.
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                android.app.ActivityOptions op = android.app.ActivityOptions.makeBasic();
+                op.setPendingIntentBackgroundActivityStartMode(
+                        android.app.ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED);
+                PendingIntent pi = PendingIntent.getActivity(this, 77, volver,
+                        PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE,
+                        op.toBundle());
+                pi.send();
+                return;
+            }
+        } catch (Throwable t) {
+            log("⚠️ Reintento 2 para volver al primer plano: " + t.getMessage());
+        }
+        // Plan C: por si todo lo anterior se bloquea.
+        try {
             startActivity(volver);
         } catch (Throwable t) {
             log("⚠️ No se pudo salir del PiP: " + t.getMessage());
@@ -769,7 +801,11 @@ public class PlayerActivity extends AppCompatActivity {
             // Si se cerró la ventanita desde el escritorio, la tarea puede
             // quedarse detrás: se trae al frente para que la app aparezca tal
             // como estaba. (Si ya está delante no hace nada.)
-            mainHandler.postDelayed(this::traerAppAlFrente, 300);
+            // Si la ventanita se cierra estando la app detras del escritorio,
+            // hay que traerla al frente; si el sistema ya lo ha hecho, no hace
+            // nada mas.
+            intentosTraerAlFrente = 0;
+            mainHandler.postDelayed(this::asegurarAppEnPrimerPlano, 600);
         }
     }
 
@@ -802,9 +838,17 @@ public class PlayerActivity extends AppCompatActivity {
      * delante no hace nada (es lo que pasa al tocar la ventanita para
      * expandirla); si se cerró desde el escritorio, la trae al frente.
      */
-    private void traerAppAlFrente() {
+    /**
+     * Comprueba que la app ha vuelto realmente al primer plano y, si no, la
+     * trae. Se reintenta un par de veces porque el sistema tarda en terminar
+     * la animacion de salida del PiP.
+     */
+    private void asegurarAppEnPrimerPlano() {
         if (isInPipMode || isFinishing() || cerrandoDesdePip) return;
+        if (enPrimerPlano || intentosTraerAlFrente >= 3) return;
+        intentosTraerAlFrente++;
         salirDePip();
+        mainHandler.postDelayed(this::asegurarAppEnPrimerPlano, 1200);
     }
 
     /**
@@ -917,6 +961,8 @@ public class PlayerActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        enPrimerPlano = true;
+        intentosTraerAlFrente = 0;
         hideSystemUI();
         // Si la Activity se reutilizó tras cerrarla, el reproductor puede estar
         // liberado: se recrea para que el título actual pueda sonar.
@@ -941,6 +987,7 @@ public class PlayerActivity extends AppCompatActivity {
                 if (isFinishing()) liberarPlayer();
             }
         }
+        enPrimerPlano = false;
         super.onStop();
     }
 
