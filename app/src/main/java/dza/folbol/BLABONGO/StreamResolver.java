@@ -8,7 +8,6 @@ import android.util.Base64;
 import android.util.Log;
 import android.webkit.CookieManager;
 import android.webkit.SslErrorHandler;
-import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
@@ -26,9 +25,6 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.Collections;
-import java.util.List;
-import java.util.ArrayList;
 
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -41,21 +37,25 @@ public class StreamResolver {
     public static final String DESKTOP_USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
-
     // ------------------------------------------------------------------
     // Los WebView de resolución cargan el embed del servidor y su reproductor
-    // puede arrancar SOLO (autoplay). Si no se cierran de golpe, ese audio se
-    // queda sonando después de cerrar el reproductor, y al abrir otro título
-    // se cruzaban dos audios. Desde aquí se pueden matar todos a la vez.
+    // puede arrancar SOLO (autoplay). Se apuntan aquí para poder cerrarlos
+    // todos de golpe cuando el usuario cierra el reproductor (así no queda
+    // ningún audio sonando).
+    // OJO: esta lista NO se debe vaciar al crear un WebView nuevo: las tres
+    // estrategias (okHttp, iframe e inyección) corren A LA VEZ, y si cada una
+    // destruye los WebViews de las demás se matan entre ellas y nunca se
+    // encuentra el stream (el canal se quedaba en blanco y salía el WebView
+    // de respaldo).
     // ------------------------------------------------------------------
-    private static final List<WebView> webViewsActivos =
-            Collections.synchronizedList(new ArrayList<WebView>());
+    private static final java.util.List<WebView> webViewsActivos =
+            java.util.Collections.synchronizedList(new java.util.ArrayList<WebView>());
 
     /** Cierra YA todos los WebViews de resolución: nada sigue sonando. */
     public static void destruirWebViewsActivos() {
-        final List<WebView> copia;
+        final java.util.List<WebView> copia;
         synchronized (webViewsActivos) {
-            copia = new ArrayList<WebView>(webViewsActivos);
+            copia = new java.util.ArrayList<WebView>(webViewsActivos);
             webViewsActivos.clear();
         }
         if (copia.isEmpty()) return;
@@ -99,7 +99,7 @@ public class StreamResolver {
         public final String m3u8Url;
         public final String cookies;
         public final String referer;
-        public final String origin;
+        public final String origin;          // <-- NUEVO
         public final Map<String, String> headers;
 
         public StreamResult(String m3u8Url, String cookies, String referer, String origin,
@@ -117,6 +117,9 @@ public class StreamResolver {
         }
     }
 
+    // ------------------------------------------------------------
+    // MÉTODO PRINCIPAL (usa un pool de hilos fijo para no crear excesivos WebViews)
+    // ------------------------------------------------------------
     private static final ExecutorService EXECUTOR = Executors.newFixedThreadPool(3);
 
     public static StreamResult resolveSynchronously(Context context, String initialUrl) {
@@ -126,42 +129,42 @@ public class StreamResolver {
         String extracted = extractRealUrl(initialUrl);
         final String realUrl = (extracted != null) ? extracted : initialUrl;
 
-        Log.d(TAG, "URL original: " + initialUrl);
-        Log.d(TAG, "URL extraida del embed: " + realUrl);
+        Log.d(TAG, "🔍 URL original: " + initialUrl);
+        Log.d(TAG, "🎯 URL extraída del embed: " + realUrl);
 
-        if (realUrl.contains(".m3u8") && isRealStream(realUrl)) {
-            Log.d(TAG, "Ya es un stream directo .m3u8: " + realUrl);
+        if (isRealStream(realUrl) && esPlaylistHls(realUrl, getDefaultHeaders(initialUrl))) {
+            Log.d(TAG, "✅ Ya es un stream directo .m3u8: " + realUrl);
             return new StreamResult(realUrl, "", getBaseUrl(initialUrl), getDefaultHeaders(initialUrl));
         }
 
-        Log.d(TAG, "Iniciando carrera de 3 estrategias...");
+        Log.d(TAG, "⚡ Iniciando carrera de 3 estrategias...");
         ExecutorService raceExecutor = Executors.newFixedThreadPool(3);
         try {
             Callable<StreamResult> okHttpTask = () -> {
                 String fast = tryFastExtraction(realUrl);
                 if (fast != null) {
-                    Log.d(TAG, "OkHttp encontro stream en " + (System.currentTimeMillis() - startTime) + "ms");
+                    Log.d(TAG, "✅ OkHttp encontró stream en " + (System.currentTimeMillis() - startTime) + "ms");
                     return new StreamResult(fast, "", getBaseUrl(initialUrl), getDefaultHeaders(initialUrl));
                 }
-                throw new Exception("OkHttp no encontro stream");
+                throw new Exception("OkHttp no encontró stream");
             };
 
             Callable<StreamResult> iframeTask = () -> {
                 StreamResult sr = resolveWithWebViewIframe(context, realUrl, initialUrl);
                 if (sr != null) {
-                    Log.d(TAG, "WebView-iframe encontro stream en " + (System.currentTimeMillis() - startTime) + "ms");
+                    Log.d(TAG, "✅ WebView-iframe encontró stream en " + (System.currentTimeMillis() - startTime) + "ms");
                     return sr;
                 }
-                throw new Exception("WebView-iframe fallo");
+                throw new Exception("WebView-iframe falló");
             };
 
             Callable<StreamResult> injectionTask = () -> {
                 StreamResult sr = resolveWithWebViewInjection(context, realUrl, initialUrl);
                 if (sr != null) {
-                    Log.d(TAG, "WebView-injection encontro stream en " + (System.currentTimeMillis() - startTime) + "ms");
+                    Log.d(TAG, "✅ WebView-injection encontró stream en " + (System.currentTimeMillis() - startTime) + "ms");
                     return sr;
                 }
-                throw new Exception("WebView-injection fallo");
+                throw new Exception("WebView-injection falló");
             };
 
             return raceExecutor.invokeAny(Arrays.asList(okHttpTask, iframeTask, injectionTask));
@@ -177,6 +180,9 @@ public class StreamResolver {
         }
     }
 
+    // ------------------------------------------------------------
+    // ESTRATEGIA IFRAME (captura origin + headers completos)
+    // ------------------------------------------------------------
     private static StreamResult resolveWithWebViewIframe(Context context, String targetUrl, String wrapperUrl) {
         final CountDownLatch latch = new CountDownLatch(1);
         final StreamResult[] result = {null};
@@ -184,10 +190,9 @@ public class StreamResolver {
         final AtomicBoolean destroyed = new AtomicBoolean(false);
         final Handler mainHandler = new Handler(Looper.getMainLooper());
 
-        Log.d(TAG, "[iframe] Base URL (wrapper): " + wrapperBase);
+        Log.d(TAG, "🏗️ [iframe] Base URL (wrapper): " + wrapperBase);
 
         mainHandler.post(() -> {
-            destruirWebViewsActivos();   // nunca dos a la vez
             WebView webView = new WebView(context);
             webViewsActivos.add(webView);
             WebSettings settings = webView.getSettings();
@@ -208,7 +213,7 @@ public class StreamResolver {
             Handler timeout = new Handler(Looper.getMainLooper());
             Runnable timeoutAction = () -> {
                 if (!destroyed.get()) {
-                    Log.e(TAG, "Timeout WebView-iframe");
+                    Log.e(TAG, "⏰ Timeout WebView-iframe");
                     destroyWebView(webView, destroyed, mainHandler);
                     latch.countDown();
                 }
@@ -239,17 +244,23 @@ public class StreamResolver {
                                 String cookies = CookieManager.getInstance().getCookie(url);
                                 if (cookies == null) cookies = "";
 
+                                // Capturar todos los headers de la petición real
                                 Map<String, String> capturedHeaders = new HashMap<>();
                                 if (request.getRequestHeaders() != null) {
                                     capturedHeaders.putAll(request.getRequestHeaders());
                                 }
+
+                                // Extraer Origin de los headers o de la URL del iframe
                                 String origin = capturedHeaders.get("Origin");
                                 if (origin == null || origin.isEmpty()) {
+                                    // Calculamos el origin del iframe real
                                     origin = getBaseUrl(targetUrl);
                                 }
 
                                 result[0] = new StreamResult(url, cookies, wrapperBase, origin, capturedHeaders);
-                                Log.d(TAG, "[iframe] Stream interceptado: " + url);
+                                Log.d(TAG, "🎯 [iframe] Stream: " + url);
+                                Log.d(TAG, "   🍪 Cookies: " + (cookies.isEmpty() ? "(ninguna)" : cookies));
+                                Log.d(TAG, "   🌐 Referer: " + wrapperBase + " | Origin: " + origin);
                                 mainHandler.post(() -> {
                                     destroyWebView(webView, destroyed, mainHandler);
                                     latch.countDown();
@@ -261,7 +272,11 @@ public class StreamResolver {
                 }
             });
 
-            webView.loadUrl(targetUrl);
+            String html = "<html><body style='margin:0;padding:0;background:black;'>" +
+                    "<iframe src='" + targetUrl + "' width='100%' height='100%' " +
+                    "frameborder='0' scrolling='no' allowfullscreen allow='autoplay'></iframe>" +
+                    "</body></html>";
+            webView.loadDataWithBaseURL(wrapperBase, html, "text/html", "UTF-8", null);
         });
 
         try { latch.await(WEBVIEW_TIMEOUT_MS + 1000, TimeUnit.MILLISECONDS); }
@@ -269,6 +284,9 @@ public class StreamResolver {
         return result[0];
     }
 
+    // ------------------------------------------------------------
+    // ESTRATEGIA INYECCIÓN JS (similar, captura origin)
+    // ------------------------------------------------------------
     private static StreamResult resolveWithWebViewInjection(Context context, String targetUrl, String wrapperUrl) {
         final CountDownLatch latch = new CountDownLatch(1);
         final StreamResult[] result = {null};
@@ -276,10 +294,7 @@ public class StreamResolver {
         final AtomicBoolean destroyed = new AtomicBoolean(false);
         final Handler mainHandler = new Handler(Looper.getMainLooper());
 
-        Log.d(TAG, "[injection] Base URL (wrapper): " + wrapperBase);
-
         mainHandler.post(() -> {
-            destruirWebViewsActivos();   // nunca dos a la vez
             WebView webView = new WebView(context);
             webViewsActivos.add(webView);
             WebSettings settings = webView.getSettings();
@@ -289,6 +304,9 @@ public class StreamResolver {
             settings.setUserAgentString(DESKTOP_USER_AGENT);
             settings.setBlockNetworkImage(true);
             settings.setLoadsImagesAutomatically(false);
+            settings.setLoadWithOverviewMode(true);
+            settings.setUseWideViewPort(true);
+            settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
             }
@@ -297,10 +315,34 @@ public class StreamResolver {
                 CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
             }
 
+            class JsBridge {
+                @android.webkit.JavascriptInterface
+                public void onStreamFound(String url) {
+                    if (url != null && esPlaylistHls(url, getDefaultHeaders(wrapperUrl)) && isRealStream(url)) {
+                        synchronized (result) {
+                            if (result[0] == null && !destroyed.get()) {
+                                CookieManager.getInstance().flush();
+                                String cookies = CookieManager.getInstance().getCookie(url);
+                                if (cookies == null) cookies = "";
+                                // En el bridge JS no tenemos headers, pero podemos usar el origin del target
+                                result[0] = new StreamResult(url, cookies, wrapperBase,
+                                        getBaseUrl(targetUrl), getDefaultHeaders(wrapperUrl));
+                                Log.d(TAG, "🎯 [injection] Stream por JS: " + url);
+                                mainHandler.post(() -> {
+                                    destroyWebView(webView, destroyed, mainHandler);
+                                    latch.countDown();
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            webView.addJavascriptInterface(new JsBridge(), "AndroidStreamBridge");
+
             Handler timeout = new Handler(Looper.getMainLooper());
             Runnable timeoutAction = () -> {
                 if (!destroyed.get()) {
-                    Log.e(TAG, "Timeout WebView-injection");
+                    Log.e(TAG, "⏰ Timeout WebView-injection");
                     destroyWebView(webView, destroyed, mainHandler);
                     latch.countDown();
                 }
@@ -339,7 +381,7 @@ public class StreamResolver {
                                 }
 
                                 result[0] = new StreamResult(reqUrl, cookies, wrapperBase, origin, capturedHeaders);
-                                Log.d(TAG, "[injection] Stream interceptado: " + reqUrl);
+                                Log.d(TAG, "🎯 [injection] Stream interceptado: " + reqUrl);
                                 mainHandler.post(() -> {
                                     destroyWebView(webView, destroyed, mainHandler);
                                     latch.countDown();
@@ -361,7 +403,7 @@ public class StreamResolver {
                 }
             });
 
-            webView.setWebChromeClient(new WebChromeClient() {
+            webView.setWebChromeClient(new android.webkit.WebChromeClient() {
                 @Override
                 public void onProgressChanged(WebView view, int newProgress) {
                     super.onProgressChanged(view, newProgress);
@@ -380,6 +422,9 @@ public class StreamResolver {
         return result[0];
     }
 
+    // ------------------------------------------------------------
+    // EXTRACCIÓN OKHTTP (sin cambios)
+    // ------------------------------------------------------------
     private static String tryFastExtraction(String url) {
         try {
             Request request = new Request.Builder()
@@ -415,11 +460,14 @@ public class StreamResolver {
                 }
             }
         } catch (IOException e) {
-            Log.d(TAG, "OkHttp fallo (esperado): " + e.getMessage());
+            Log.d(TAG, "OkHttp falló (esperado): " + e.getMessage());
         }
         return null;
     }
 
+    // ------------------------------------------------------------
+    // UTILIDADES (sin cambios importantes)
+    // ------------------------------------------------------------
     private static void injectClickScript(WebView webView) {
         String script = "javascript:(function(){" +
                 "function notify(url){if(url&&url.includes('.m3u8'))AndroidStreamBridge.onStreamFound(url);}" +
@@ -435,11 +483,21 @@ public class StreamResolver {
                 "});});});" +
                 "observer.observe(document,{childList:true,subtree:true});" +
                 "function clickPlay(){" +
-                "var selectors=['button','a','div[role=\"button\"]','.play','.btn-play','.vjs-big-play-button','.mejs-playpause-button','.jw-controls .jw-play'];";
+                "var selectors=['button','a','div[role=\"button\"]','.play','.btn-play','.vjs-big-play-button','.mejs-playpause-button','.jw-controls .jw-play'];" +
+                "for(var s of selectors){var els=document.querySelectorAll(s);" +
+                "for(var i=0;i<els.length;i++){var el=els[i];var txt=(el.textContent||'').toLowerCase();" +
+                "if(txt.includes('play')||txt.includes('reproducir')||txt.includes('▶')||txt.includes('▷')){el.click();console.log('Clic en botón play');return;}}}" +
+                "var video=document.querySelector('video');if(video){video.play();video.click();console.log('Clic en video');}" +
+                "}" +
+                "clickPlay();" +
+                "var html=document.documentElement.outerHTML;" +
+                "var matches=html.match(/(https?:\\/\\/[^\\s\"'<>]+\\.m3u8[^\\s\"'<>]*)/gi);" +
+                "if(matches){for(var i=0;i<matches.length;i++)notify(matches[i]);}" +
+                "})();";
         webView.evaluateJavascript(script, null);
     }
 
-    static void scheduleRetry(WebView webView, AtomicBoolean destroyed) {
+    private static void scheduleRetry(WebView webView, AtomicBoolean destroyed) {
         Handler retryHandler = new Handler(Looper.getMainLooper());
         final int[] count = {0};
         Runnable retryRunnable = new Runnable() {
@@ -526,12 +584,12 @@ public class StreamResolver {
         try {
             Request.Builder b = new Request.Builder().url(url).get()
                     .header("Range", "bytes=0-1023")
-                    .header("User-Agent", DESKTOP_USER_AGENT);
+                    .addHeader("User-Agent", DESKTOP_USER_AGENT);
             if (headers != null) {
                 String ref = headers.get("Referer");
-                if (ref != null && !ref.isEmpty()) b.header("Referer", ref);
+                if (ref != null && !ref.isEmpty()) b.addHeader("Referer", ref);
                 String ck = headers.get("Cookie");
-                if (ck != null && !ck.isEmpty()) b.header("Cookie", ck);
+                if (ck != null && !ck.isEmpty()) b.addHeader("Cookie", ck);
             }
             Response r = httpClient.newCall(b.build()).execute();
             try {
