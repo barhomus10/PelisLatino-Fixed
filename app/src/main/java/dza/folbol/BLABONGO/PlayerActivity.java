@@ -51,6 +51,7 @@ import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.media3.common.MediaItem;
+import androidx.media3.common.MimeTypes;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
 import androidx.media3.common.util.UnstableApi;
@@ -1439,7 +1440,7 @@ public class PlayerActivity extends AppCompatActivity {
                     player.clearMediaItems();
 
                     dataSourceFactory.setDefaultRequestProperties(finalHeaders);
-                    MediaItem mediaItem = new MediaItem.Builder().setUri(Uri.parse(url)).build();
+                    MediaItem mediaItem = mediaItemPara(url);
                     player.setMediaItem(mediaItem);
                     player.prepare();
                     pedirFocoAudio();
@@ -1485,7 +1486,7 @@ public class PlayerActivity extends AppCompatActivity {
             player.stop();
             player.clearMediaItems();
             dataSourceFactory.setDefaultRequestProperties(headers);
-            MediaItem mediaItem = new MediaItem.Builder().setUri(Uri.parse(url)).build();
+            MediaItem mediaItem = mediaItemPara(url);
             player.setMediaItem(mediaItem);
             player.prepare();
             pedirFocoAudio();
@@ -1496,6 +1497,24 @@ public class PlayerActivity extends AppCompatActivity {
             isResolving = false;
             log("Stream directo cargado.");
         });
+    }
+
+    /**
+     * ExoPlayer decide si algo es HLS mirando la RUTA de la URL (que acabe en
+     * .m3u8). Los canales de deportes sirven el playlist como
+     * playlist.php?id=..&sig=.., sin .m3u8, asi que ExoPlayer lo toma por un
+     * fichero normal e intenta leer un contenedor de media dentro de un texto:
+     * falla aunque el stream sea perfecto.
+     *
+     * Cuando la URL no trae .m3u8 se lo decimos nosotros con el MIME. Las
+     * peliculas siempre resuelven a un master.m3u8, asi que esto no las toca.
+     */
+    private MediaItem mediaItemPara(String url) {
+        MediaItem.Builder b = new MediaItem.Builder().setUri(Uri.parse(url));
+        if (url != null && !url.toLowerCase().contains(".m3u8")) {
+            b.setMimeType(MimeTypes.APPLICATION_M3U8);
+        }
+        return b.build();
     }
 
     private boolean isNetworkAvailable() {
