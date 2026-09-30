@@ -91,6 +91,9 @@ public class StreamResolver {
     /** Embeds de deportes tipo https://..../embed2/espn.php */
     private static final Pattern EMBED_DEPORTES = Pattern.compile(
             "https?://[^/]+/embed2?/[A-Za-z0-9_-]+\\.php", Pattern.CASE_INSENSITIVE);
+    /** Reproductor stream.php, por si no viene dentro de un iframe. */
+    private static final Pattern STREAM_PHP = Pattern.compile(
+            "https?://[^\\s\"'<>\\\\]*stream\\.php\\?[^\\s\"'<>\\\\]*", Pattern.CASE_INSENSITIVE);
     /** Playlist HLS servido como playlist.php?id=..&sig=.. (sin .m3u8). */
     private static final Pattern PLAYLIST_PHP = Pattern.compile(
             "https?://[^\\s\"'<>\\\\]*playlist\\.php\\?[^\\s\"'<>\\\\]*", Pattern.CASE_INSENSITIVE);
@@ -509,9 +512,12 @@ public class StreamResolver {
     private static final int MAX_PROFUNDIDAD_CADENA = 5;
     private static final long TIEMPO_MAX_CADENA_MS = 25000;
 
+    // Holgados: el embed de deportes es una pagina de 640 KB y el iframe del
+    // reproductor va al FINAL (byte 640.862), asi que hay que descargarla
+    // entera. En el movil eso puede tardar bastante mas que en casa.
     private static final OkHttpClient clienteCadena = new OkHttpClient.Builder()
-            .connectTimeout(8, TimeUnit.SECONDS)
-            .readTimeout(12, TimeUnit.SECONDS)
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(25, TimeUnit.SECONDS)
             .followRedirects(true)
             .build();
 
@@ -680,6 +686,12 @@ public class StreamResolver {
             while (mi.find()) {
                 String c = completarUrl(mi.group(1), url);
                 if (c != null && c.contains("stream.php")) { reproductor = c; break; }
+            }
+            if (reproductor == null) {
+                // Si el iframe viene raro o la pagina cambia, se busca la URL
+                // del reproductor suelta en el HTML
+                Matcher ms = STREAM_PHP.matcher(htmlEmbed.replace("\\/", "/").replace("&amp;", "&"));
+                if (ms.find()) reproductor = ms.group(0);
             }
             if (reproductor == null) return null;
 
