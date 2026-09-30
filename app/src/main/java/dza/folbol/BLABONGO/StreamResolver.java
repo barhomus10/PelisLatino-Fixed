@@ -229,6 +229,13 @@ private static final long WEBVIEW_TIMEOUT_MS = 20_000;
         final Handler mainHandler = new Handler(Looper.getMainLooper());
 
         Log.d(TAG, "🏗️ [iframe] Base URL (wrapper): " + wrapperBase);
+        // La pagina que envuelve al iframe tiene que ser del MISMO ORIGEN que
+        // el propio iframe. Si se usa el origen del envoltorio (belkaperu)
+        // mientras el iframe apunta a otro dominio (tarjetarojita, lunchup...),
+        // el WebView ni siquiera llega a cargarlo: no entraba NI UNA peticion
+        // y saltaba el timeout sin haber intentado nada.
+        final String basePagina = getBaseUrl(targetUrl);
+        Log.d(TAG, "🏗️ [iframe] Origen de la pagina: " + basePagina);
 
         mainHandler.post(() -> {
             WebView webView = new WebView(context);
@@ -240,6 +247,10 @@ private static final long WEBVIEW_TIMEOUT_MS = 20_000;
             settings.setUserAgentString(DESKTOP_USER_AGENT);
             settings.setBlockNetworkImage(true);
             settings.setLoadsImagesAutomatically(false);
+            // La pagina envoltorio se genera en memoria y mete un iframe a un
+            // dominio real: sin estos dos ajustes el WebView la bloquea.
+            settings.setAllowFileAccessFromFileURLs(true);
+            settings.setAllowUniversalAccessFromFileURLs(true);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
             }
@@ -248,11 +259,13 @@ private static final long WEBVIEW_TIMEOUT_MS = 20_000;
                 CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
             }
 
+            final AtomicBoolean primeraPeticion = new AtomicBoolean(false);
             final long inicio = System.currentTimeMillis();
             Handler timeout = new Handler(Looper.getMainLooper());
             Runnable timeoutAction = () -> {
                 if (!destroyed.get()) {
-                    Log.e(TAG, "⏰ Timeout WebView-iframe");
+                    Log.e(TAG, "⏰ Timeout WebView-iframe"
+                            + (primeraPeticion.get() ? "" : " (SIN recibir ni una peticion)"));
                     destroyWebView(webView, destroyed, mainHandler);
                     latch.countDown();
                 }
@@ -307,6 +320,9 @@ private static final long WEBVIEW_TIMEOUT_MS = 20_000;
                             }
                         }
                     }
+                    if (primeraPeticion.compareAndSet(false, true)) {
+                        Log.d(TAG, "[iframe] entra la 1ª peticion: " + url);
+                    }
                     // ESPERA INTELIGENTE: mientras la pagina siga pidiendo cosas
                     // se le da mas tiempo. Clappr (lunchup.net y compania) carga
                     // 1 MB de JavaScript y descifra una configuracion enorme
@@ -321,11 +337,19 @@ private static final long WEBVIEW_TIMEOUT_MS = 20_000;
                 }
             });
 
+            webView.setWebChromeClient(new android.webkit.WebChromeClient() {
+                @Override
+                public void onProgressChanged(WebView view, int newProgress) {
+                    super.onProgressChanged(view, newProgress);
+                    if (newProgress == 100) Log.d(TAG, "[iframe] pagina cargada al 100%");
+                }
+            });
+
             String html = "<html><body style='margin:0;padding:0;background:black;'>" +
                     "<iframe src='" + targetUrl + "' width='100%' height='100%' " +
                     "frameborder='0' scrolling='no' allowfullscreen allow='autoplay'></iframe>" +
                     "</body></html>";
-            webView.loadDataWithBaseURL(wrapperBase, html, "text/html", "UTF-8", null);
+            webView.loadDataWithBaseURL(basePagina, html, "text/html", "UTF-8", null);
         });
 
         try { latch.await(WEBVIEW_MAXIMO_MS + 1000, TimeUnit.MILLISECONDS); }
