@@ -88,6 +88,12 @@ public class StreamResolver {
     private static final Pattern RECURSO_ESTATICO = Pattern.compile(
             ".*\\.(jpg|jpeg|png|gif|webp|bmp|svg|css|woff|woff2|ttf|eot|js|json|xml|ico|mp4|mp3|apk)(\\?|$).*",
             Pattern.CASE_INSENSITIVE);
+    /** Embeds de deportes tipo https://..../embed2/espn.php */
+    private static final Pattern EMBED_DEPORTES = Pattern.compile(
+            "https?://[^/]+/embed2?/[A-Za-z0-9_-]+\\.php", Pattern.CASE_INSENSITIVE);
+    /** Playlist HLS servido como playlist.php?id=..&sig=.. (sin .m3u8). */
+    private static final Pattern PLAYLIST_PHP = Pattern.compile(
+            "https?://[^\\s\"'<>\\\\]*playlist\\.php\\?[^\\s\"'<>\\\\]*", Pattern.CASE_INSENSITIVE);
     /** Pinta de playlist/stream, para los CDN que no usan la extension .m3u8. */
     private static final Pattern PARECE_STREAM = Pattern.compile(
             "(playlist|stream|live|hls|index|master|mono|chunklist|/vivo/|/channels/|\\.php\\?)",
@@ -141,7 +147,16 @@ public class StreamResolver {
             return new StreamResult(realUrl, "", getBaseUrl(initialUrl), getDefaultHeaders(initialUrl));
         }
 
-        Log.d(TAG, "⚡ Iniciando carrera de 3 estrategias...");
+        // Atajo: los embeds de deportes (embed2/espn.php y compania) se resuelven
+        // directos, con 3 peticiones y sin WebView. Si la URL no es de esa
+        // familia devuelve null y todo sigue igual que hasta ahora.
+        StreamResult deportes = resolverEmbedDeportes(realUrl);
+        if (deportes != null) {
+            Log.d(TAG, "Embed de deportes resuelto en " + (System.currentTimeMillis() - startTime) + "ms");
+            return deportes;
+        }
+
+        Log.d(TAG, "⚡ Iniciando carrera de 4 estrategias...");
         ExecutorService raceExecutor = Executors.newFixedThreadPool(4);
         try {
             // 1º la cadena: solo HTTP, sin WebView y sin mostrar nada por pantalla
@@ -625,7 +640,8 @@ public class StreamResolver {
     /** Convierte rutas relativas ("//host/x", "/x") en URLs completas. */
     private static String completarUrl(String u, String base) {
         if (u == null) return null;
-        String s = u.trim().replace("\\/", "/");
+        // En el HTML los enlaces vienen con &amp; hay que dejarlos como &
+        String s = u.trim().replace("\\/", "/").replace("&amp;", "&");
         if (s.startsWith("http")) return s;
         if (s.startsWith("//")) return "https:" + s;
         if (s.startsWith("/") && base != null && base.startsWith("http")) {
@@ -637,6 +653,73 @@ public class StreamResolver {
             }
         }
         return s;
+    }
+
+    /**
+     * Atajo DIRECTO para los embeds de deportes tipo
+     *      https://embed.saohgdasregions.fun/embed2/espn.php
+     * (y los de regionales.saohgdassregions.com).
+     *
+     * La cadena es siempre la misma y se recorre con 3 peticiones, sin WebView
+     * y sin adivinar:
+     *   1. el embed           -> un iframe a .../stream.php?canal=X&sig=...
+     *   2. ese stream.php     -> dentro del JavaScript va .../playlist.php?id=N_&sig=...
+     *   3. ese playlist.php   -> el HLS de verdad (sin extension .m3u8)
+     *
+     * Si la URL no es de esta familia devuelve null y se sigue con el resto de
+     * estrategias, asi que no se toca nada de lo que ya funciona.
+     */
+    static StreamResult resolverEmbedDeportes(String url) {
+        if (url == null || !EMBED_DEPORTES.matcher(url).find()) return null;
+        try {
+            String htmlEmbed = descargarTexto(url, null);
+            if (htmlEmbed == null) return null;
+
+            String reproductor = null;
+            Matcher mi = IFRAME_SRC.matcher(htmlEmbed);
+            while (mi.find()) {
+                String c = completarUrl(mi.group(1), url);
+                if (c != null && c.contains("stream.php")) { reproductor = c; break; }
+            }
+            if (reproductor == null) return null;
+
+            String htmlReproductor = descargarTexto(reproductor, url);
+            if (htmlReproductor == null) return null;
+
+            String limpio = htmlReproductor.replace("\\/", "/").replace("\\u002F", "/");
+            Matcher mp = PLAYLIST_PHP.matcher(limpio);
+            if (!mp.find()) return null;
+            String playlist = mp.group(0).replace("&amp;", "&");
+
+            String cuerpo = descargarTexto(playlist, reproductor);
+            if (cuerpo == null || !cuerpo.trim().startsWith("#EXTM3U")) return null;
+
+            Log.d(TAG, "[deportes] Playlist HLS: " + playlist);
+            return new StreamResult(playlist, "", reproductor,
+                    getBaseUrl(playlist), getDefaultHeaders(reproductor));
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** Descarga una pagina y devuelve su texto, o null si algo va mal. */
+    private static String descargarTexto(String url, String referer) {
+        try {
+            Request.Builder b = new Request.Builder().url(url).get()
+                    .addHeader("User-Agent", DESKTOP_USER_AGENT)
+                    .addHeader("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                    .addHeader("Accept-Language", "es-ES,es;q=0.9");
+            if (referer != null && !referer.isEmpty()) b.addHeader("Referer", referer);
+            Response r = clienteCadena.newCall(b.build()).execute();
+            try {
+                if (r == null || !r.isSuccessful() || r.body() == null) return null;
+                return r.body().string();
+            } finally {
+                try { r.close(); } catch (Throwable ignored) { }
+            }
+        } catch (Throwable t) {
+            return null;
+        }
     }
 
     private static void injectClickScript(WebView webView) {
