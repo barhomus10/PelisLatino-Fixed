@@ -104,6 +104,7 @@ public class PlayerActivity extends AppCompatActivity {
     private final SimpleDateFormat timeFormat = new SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault());
 
     private boolean streamReady = false;
+    private boolean webViewOcultoYaProbado = false;   // el WebView oculto se prueba una sola vez por título
     private boolean isResolving = false;
     /** Momento en que arrancó la resolución en curso (para el "perro guardián"). */
     private long resolucionInicio = 0L;
@@ -932,6 +933,7 @@ public class PlayerActivity extends AppCompatActivity {
         // anterior y se garantiza que el reproductor existe.
         isResolving = false;
         resolucionInicio = 0L;
+        webViewOcultoYaProbado = false;
         cerrandoDesdePip = false;
         asegurarPlayer();
         String nuevaUrl = intent.getStringExtra("stream_url");
@@ -1111,7 +1113,7 @@ public class PlayerActivity extends AppCompatActivity {
                     if (webViewFallback != null && webViewFallback.getVisibility() != View.VISIBLE) {
                         log("🌐 Reproducción ExoPlayer fallida, abriendo reproductor web.");
                         isResolving = false;
-                        mostrarFallbackWebView();
+                        usarWebViewOcultoParaResolver();
                     }
                 }
             }
@@ -1179,25 +1181,87 @@ public class PlayerActivity extends AppCompatActivity {
                 view.loadUrl(url);
                 return true;
             }
+
+            /**
+             * Si por el WebView OCULTO pasa un playlist HLS, se reproduce con
+             * ExoPlayer. El WebView solo sirve para que la página ejecute su
+             * JavaScript; NUNCA se muestra al usuario.
+             */
+            @Override
+            public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                String u = (request.getUrl() == null) ? null : request.getUrl().toString();
+                if (u != null && u.contains(".m3u8") && !streamReady) {
+                    String ref = (request.getRequestHeaders() == null) ? null
+                            : request.getRequestHeaders().get("Referer");
+                    final String m3u8 = u;
+                    final String referer = (ref != null && !ref.isEmpty()) ? ref : urlIframeInicial;
+                    mainHandler.post(() -> {
+                        if (streamReady || isFinishing()) return;
+                        log("🎯 Stream visto desde el WebView oculto");
+                        try {
+                            webViewFallback.stopLoading();
+                            webViewFallback.setVisibility(View.GONE);
+                        } catch (Throwable ignored) { }
+                        resolverStreamDirecto(m3u8, "", referer, urlIframeInicial);
+                    });
+                }
+                return super.shouldInterceptRequest(view, request);
+            }
         });
 
         webViewFallback.setWebChromeClient(new WebChromeClient());
     }
 
-    private void mostrarFallbackWebView() {
+    /**
+     * Último recurso: el WebView se usa OCULTO, solo para que la página ejecute
+     * su JavaScript (hay reproductores que arman el stream con JS y no queda
+     * otra). En cuanto aparece un playlist HLS se reproduce con ExoPlayer.
+     *
+     * El WebView NUNCA se muestra: antes salía la página entera en pantalla y
+     * eso es justo lo que no se quiere. Si de aquí tampoco sale nada, se avisa
+     * al usuario en vez de dejarle viendo una web.
+     */
+    private void usarWebViewOcultoParaResolver() {
         runOnUiThread(() -> {
             if (webViewFallback == null) return;
             String url = urlIframeInicial;
             if (url == null || url.isEmpty() || !url.startsWith("http")) {
-                log("❌ No hay URL válida para el reproductor web.");
+                log("❌ No hay URL válida que resolver.");
+                avisarSinStream();
                 return;
             }
-            log("🌐 Abriendo reproductor web de respaldo: " + url);
-            webViewFallback.setVisibility(View.VISIBLE);
-            webViewFallback.loadUrl(url);
+            if (webViewOcultoYaProbado) {
+                avisarSinStream();
+                return;
+            }
+            webViewOcultoYaProbado = true;
+            log("🕵️ Último recurso: WebView oculto para ejecutar el JS de la página");
+            try {
+                webViewFallback.setVisibility(View.GONE);   // NUNCA visible
+                webViewFallback.stopLoading();
+                webViewFallback.loadUrl(url);
+            } catch (Throwable t) {
+                avisarSinStream();
+                return;
+            }
+            mainHandler.postDelayed(() -> {
+                if (!streamReady && !isFinishing() && !cerrandoDesdePip) {
+                    log("⚠️ Ni la cadena ni el WebView oculto encontraron el stream.");
+                    avisarSinStream();
+                }
+            }, 20000);
         });
     }
 
+    /** Avisa al usuario de que este enlace no da stream, en vez de mostrarle una web. */
+    private void avisarSinStream() {
+        runOnUiThread(() -> {
+            try {
+                Toast.makeText(this, "No se pudo cargar este enlace. Prueba con otra opción del canal.",
+                        Toast.LENGTH_LONG).show();
+            } catch (Throwable ignored) { }
+        });
+    }
     /**
      * MEJORA 2026-09-28: elige el resolver según la URL.
      *
@@ -1279,7 +1343,7 @@ public class PlayerActivity extends AppCompatActivity {
         } catch (Throwable t) {
             isResolving = false;
             log("❌ No se pudo preparar el hilo de resolución: " + t.getMessage());
-            mostrarFallbackWebView();
+            usarWebViewOcultoParaResolver();
             return;
         }
 
@@ -1291,7 +1355,7 @@ public class PlayerActivity extends AppCompatActivity {
                     log("❌ StreamResolver no devolvió stream. Cambiando a reproductor web.");
                     mainHandler.post(() -> {
                         isResolving = false;
-                        mostrarFallbackWebView();
+                        usarWebViewOcultoParaResolver();
                     });
                     return;
                 }
@@ -1318,7 +1382,7 @@ public class PlayerActivity extends AppCompatActivity {
                 mainHandler.post(() -> {
                     if (player == null) {
                         isResolving = false;
-                        mostrarFallbackWebView();
+                        usarWebViewOcultoParaResolver();
                         return;
                     }
 
@@ -1394,7 +1458,7 @@ public class PlayerActivity extends AppCompatActivity {
                 log("❌ Error en callback: " + e.getMessage());
                 mainHandler.post(() -> {
                     isResolving = false;
-                    mostrarFallbackWebView();
+                    usarWebViewOcultoParaResolver();
                 });
             }
         });

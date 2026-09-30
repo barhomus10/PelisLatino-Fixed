@@ -18,7 +18,11 @@ import android.net.http.SslError;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.net.URL;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.*;
@@ -138,8 +142,18 @@ public class StreamResolver {
         }
 
         Log.d(TAG, "⚡ Iniciando carrera de 3 estrategias...");
-        ExecutorService raceExecutor = Executors.newFixedThreadPool(3);
+        ExecutorService raceExecutor = Executors.newFixedThreadPool(4);
         try {
+            // 1º la cadena: solo HTTP, sin WebView y sin mostrar nada por pantalla
+            Callable<StreamResult> cadenaTask = () -> {
+                StreamResult sr = resolverEnCadena(realUrl);
+                if (sr != null) {
+                    Log.d(TAG, "[cadena] Stream resuelto en " + (System.currentTimeMillis() - startTime) + "ms");
+                    return sr;
+                }
+                throw new Exception("La cadena no encontro stream");
+            };
+
             Callable<StreamResult> okHttpTask = () -> {
                 String fast = tryFastExtraction(realUrl);
                 if (fast != null) {
@@ -167,7 +181,7 @@ public class StreamResolver {
                 throw new Exception("WebView-injection falló");
             };
 
-            return raceExecutor.invokeAny(Arrays.asList(okHttpTask, iframeTask, injectionTask));
+            return raceExecutor.invokeAny(Arrays.asList(cadenaTask, okHttpTask, iframeTask, injectionTask));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             Log.e(TAG, "Carrera interrumpida");
@@ -468,6 +482,163 @@ public class StreamResolver {
     // ------------------------------------------------------------
     // UTILIDADES (sin cambios importantes)
     // ------------------------------------------------------------
+    // ------------------------------------------------------------
+    // RESOLUCIÓN EN CADENA (solo HTTP, SIN WebView)
+    //
+    // Los canales son una cadena de páginas: el listado apunta a un envoltorio,
+    // ese abre un embed, el embed mete un iframe al reproductor y el reproductor
+    // pide el playlist HLS. Este método recorre esa cadena con OkHttp, sin
+    // mostrar nada por pantalla, así que el WebView solo hace falta cuando la
+    // página arma el stream con JavaScript.
+    // ------------------------------------------------------------
+    private static final int MAX_PROFUNDIDAD_CADENA = 5;
+    private static final long TIEMPO_MAX_CADENA_MS = 25000;
+
+    private static final OkHttpClient clienteCadena = new OkHttpClient.Builder()
+            .connectTimeout(8, TimeUnit.SECONDS)
+            .readTimeout(12, TimeUnit.SECONDS)
+            .followRedirects(true)
+            .build();
+
+    /** URL entre comillas dentro del HTML (los reproductores las escriben así). */
+    private static final Pattern URL_SUELTA = Pattern.compile(
+            "[\"'](https?://[^\"'\\s]{10,300})[\"']");
+    /** Pinta de stream: por aquí se sigue la cadena. */
+    private static final Pattern CANDIDATO_CADENA = Pattern.compile(
+            "(playlist|stream|live|hls|index|master|mono|chunklist|/vivo/|/channels/|\\.php\\?|/embed/|/embed2/|repro)",
+            Pattern.CASE_INSENSITIVE);
+    /** Ni anuncios ni librerías: por ahí nunca sale el stream. */
+    private static final Pattern BASURA_CADENA = Pattern.compile(
+            "(google|doubleclick|googlesyndication|adsystem|popads|adservice|facebook|twitter|jsdelivr|cdnjs|cloudflare|analytics|jquery|clappr|jwplayer|videojs|player\\.js)",
+            Pattern.CASE_INSENSITIVE);
+
+    /**
+     * Sigue la cadena de páginas hasta dar con el playlist HLS.
+     * Devuelve null si en 25 s o en 5 saltos no aparece nada.
+     */
+    static StreamResult resolverEnCadena(String url) {
+        return resolverEnCadena(url, 0, new HashSet<String>(), null,
+                System.currentTimeMillis() + TIEMPO_MAX_CADENA_MS);
+    }
+
+    private static StreamResult resolverEnCadena(String url, int profundidad,
+                                                Set<String> visto, String referer, long caduca) {
+        if (url == null || !url.startsWith("http")) return null;
+        if (profundidad > MAX_PROFUNDIDAD_CADENA) return null;
+        if (System.currentTimeMillis() > caduca) return null;
+        if (visto.contains(url)) return null;
+        visto.add(url);
+        if (RECURSO_ESTATICO.matcher(url).matches()) return null;
+
+        try {
+            Request.Builder b = new Request.Builder().url(url).get()
+                    .addHeader("User-Agent", DESKTOP_USER_AGENT)
+                    .addHeader("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                    .addHeader("Accept-Language", "es-ES,es;q=0.9");
+            if (referer != null && !referer.isEmpty()) b.addHeader("Referer", referer);
+            Response r = clienteCadena.newCall(b.build()).execute();
+            try {
+                if (r == null || !r.isSuccessful() || r.body() == null) return null;
+                String ct = r.header("Content-Type");
+                String cuerpo = r.body().string();
+                if (cuerpo == null || cuerpo.isEmpty()) return null;
+
+                boolean esHls = (ct != null && ct.toLowerCase().contains("mpegurl"))
+                        || cuerpo.trim().startsWith("#EXTM3U");
+                if (esHls) {
+                    Log.d(TAG, "[cadena] Playlist HLS: " + url);
+                    String base = referer != null ? referer : getBaseUrl(url);
+                    return new StreamResult(url, "", base, getBaseUrl(url), getDefaultHeaders(base));
+                }
+
+                // Un .m3u8 escrito en la página
+                Matcher m = M3U8_URL.matcher(cuerpo.replace("\\/", "/"));
+                if (m.find()) {
+                    String m3u8 = m.group(1);
+                    Log.d(TAG, "[cadena] m3u8 dentro de la página: " + m3u8);
+                    return new StreamResult(m3u8, "", url, getBaseUrl(m3u8), getDefaultHeaders(url));
+                }
+
+                // Seguir tirando del hilo
+                for (String candidato : candidatosCadena(url, cuerpo)) {
+                    StreamResult sr = resolverEnCadena(candidato, profundidad + 1, visto, url, caduca);
+                    if (sr != null) return sr;
+                }
+            } finally {
+                try { r.close(); } catch (Throwable ignored) { }
+            }
+        } catch (Throwable t) {
+            return null;
+        }
+        return null;
+    }
+
+    /** Páginas por las que merece la pena seguir: iframes, ?r= y URLs con pinta de stream. */
+    private static List<String> candidatosCadena(String url, String cuerpo) {
+        List<String> brutos = new ArrayList<>();
+        String t = cuerpo.replace("\\/", "/").replace("&amp;", "&");
+
+        Matcher mi = IFRAME_SRC.matcher(t);
+        while (mi.find()) brutos.add(mi.group(1));
+
+        // Los envoltorios se ANIDAN (reprón.html?r=...?r=...): se prueban TODOS
+        // los niveles, no solo el primero, y también van en Base64.
+        String[] partes = url.split("\\?r=");
+        for (int i = 1; i < partes.length; i++) {
+            String v = partes[i].trim();
+            if (v.startsWith("http")) {
+                brutos.add(v);
+            } else {
+                String dec = decodificarBase64(v);
+                if (dec != null && dec.startsWith("http")) brutos.add(dec);
+            }
+        }
+
+        Matcher mu = URL_SUELTA.matcher(t);
+        while (mu.find()) brutos.add(mu.group(1));
+
+        List<String> buenos = new ArrayList<>();
+        for (String c : brutos) {
+            String u = completarUrl(c, url);
+            if (u == null || !u.startsWith("http")) continue;
+            if (RECURSO_ESTATICO.matcher(u).matches()) continue;
+            if (BASURA_CADENA.matcher(u).find()) continue;
+            if (!CANDIDATO_CADENA.matcher(u).find()) continue;
+            if (!buenos.contains(u)) buenos.add(u);
+            if (buenos.size() >= 10) break;
+        }
+        return buenos;
+    }
+
+    private static String decodificarBase64(String txt) {
+        try {
+            if (txt == null || txt.length() < 24) return null;
+            if (!txt.matches("^[A-Za-z0-9+/=]+$")) return null;
+            String padded = txt;
+            while (padded.length() % 4 != 0) padded += "=";
+            return new String(Base64.decode(padded, Base64.DEFAULT), "UTF-8");
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** Convierte rutas relativas ("//host/x", "/x") en URLs completas. */
+    private static String completarUrl(String u, String base) {
+        if (u == null) return null;
+        String s = u.trim().replace("\\/", "/");
+        if (s.startsWith("http")) return s;
+        if (s.startsWith("//")) return "https:" + s;
+        if (s.startsWith("/") && base != null && base.startsWith("http")) {
+            try {
+                URL b = new URL(base);
+                return b.getProtocol() + "://" + b.getHost() + s;
+            } catch (Throwable t) {
+                return null;
+            }
+        }
+        return s;
+    }
+
     private static void injectClickScript(WebView webView) {
         String script = "javascript:(function(){" +
                 "function notify(url){if(url&&url.includes('.m3u8'))AndroidStreamBridge.onStreamFound(url);}" +
