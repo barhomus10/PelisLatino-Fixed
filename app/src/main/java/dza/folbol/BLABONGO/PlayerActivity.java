@@ -948,6 +948,13 @@ public class PlayerActivity extends AppCompatActivity {
             errorRefreshCount = 0;
             resolverStreamDirecto(streamDirecto, streamCookies, streamReferer, streamOrigin);
         } else if (nuevoIframe != null && !nuevoIframe.isEmpty()) {
+            // Si vuelve a llegar la MISMA url (doble clic en el canal) mientras
+            // ya se esta resolviendo o reproduciendo, no se reinicia todo: antes
+            // eso hacia resolver dos veces y volver a preparar el player.
+            if (nuevoIframe.equals(urlIframeInicial) && (streamReady || isResolving)) {
+                log("⏳ Vuelve a llegar la misma URL; se ignora (ya estaba en marcha).");
+                return;
+            }
             urlIframeInicial = nuevoIframe;
             streamDirecto = null;
             errorRefreshCount = 0;
@@ -1512,6 +1519,9 @@ public class PlayerActivity extends AppCompatActivity {
     private MediaItem mediaItemPara(String url) {
         MediaItem.Builder b = new MediaItem.Builder().setUri(Uri.parse(url));
         if (url != null && !url.toLowerCase().contains(".m3u8")) {
+            // Si esta linea sale por el log, el arreglo SI esta en el build.
+            // Si no sale, es que hay un APK viejo instalado.
+            log("\uD83C\uDFAC Reproduciendo como HLS (la URL no trae .m3u8): " + url);
             b.setMimeType(MimeTypes.APPLICATION_M3U8);
         }
         return b.build();
