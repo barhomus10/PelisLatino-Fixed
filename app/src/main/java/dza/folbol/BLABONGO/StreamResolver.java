@@ -37,7 +37,11 @@ import okhttp3.Response;
 public class StreamResolver {
 
     private static final String TAG = "StreamResolver";
-    private static final long WEBVIEW_TIMEOUT_MS = 10_000; // reducimos timeout para no retener recursos
+    // 20 s en vez de 10: hay paginas (Clappr, como lunchup.net) que cargan 1 MB de
+// JavaScript y decodifican una configuracion enorme antes de pedir el m3u8. Con
+// 10 s se cortaban siempre y el canal no salia aunque el WebView estuviera a
+// punto de encontrar el stream.
+private static final long WEBVIEW_TIMEOUT_MS = 20_000;
     public static final String DESKTOP_USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
@@ -619,12 +623,20 @@ public class StreamResolver {
         while (mu.find()) brutos.add(mu.group(1));
 
         List<String> buenos = new ArrayList<>();
+        List<String> iframes = new ArrayList<>();
+        Matcher mf = IFRAME_SRC.matcher(t);
+        while (mf.find()) iframes.add(mf.group(1));
+
         for (String c : brutos) {
             String u = completarUrl(c, url);
             if (u == null || !u.startsWith("http")) continue;
             if (RECURSO_ESTATICO.matcher(u).matches()) continue;
             if (BASURA_CADENA.matcher(u).find()) continue;
-            if (!CANDIDATO_CADENA.matcher(u).find()) continue;
+            // Los iframes NO se filtran por el patron de candidatos: son la
+            // senal mas clara de por donde sigue la cadena, y habia enlaces
+            // perfectamente validos (lunchup.net/e/xxxxx) que se descartaban
+            // solo por no contener "stream" ni "playlist".
+            if (!iframes.contains(c) && !CANDIDATO_CADENA.matcher(u).find()) continue;
             if (!buenos.contains(u)) buenos.add(u);
             if (buenos.size() >= 10) break;
         }
