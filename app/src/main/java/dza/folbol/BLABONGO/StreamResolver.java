@@ -309,10 +309,12 @@ private static final long WEBVIEW_TIMEOUT_MS = 20_000;
                                     origin = getBaseUrl(targetUrl);
                                 }
 
-                                result[0] = new StreamResult(url, cookies, wrapperBase, origin, capturedHeaders);
+                                String referer = refererRealDe(capturedHeaders);
+                                if (referer.isEmpty()) referer = getBaseUrl(targetUrl);
+                                result[0] = new StreamResult(url, cookies, referer, origin, capturedHeaders);
                                 Log.d(TAG, "🎯 [iframe] Stream: " + url);
                                 Log.d(TAG, "   🍪 Cookies: " + (cookies.isEmpty() ? "(ninguna)" : cookies));
-                                Log.d(TAG, "   🌐 Referer: " + wrapperBase + " | Origin: " + origin);
+                                Log.d(TAG, "   🌐 Referer: " + referer + " | Origin: " + origin);
                                 mainHandler.post(() -> {
                                     destroyWebView(webView, destroyed, mainHandler);
                                     latch.countDown();
@@ -398,8 +400,9 @@ private static final long WEBVIEW_TIMEOUT_MS = 20_000;
                                 String cookies = CookieManager.getInstance().getCookie(url);
                                 if (cookies == null) cookies = "";
                                 // En el bridge JS no tenemos headers, pero podemos usar el origin del target
-                                result[0] = new StreamResult(url, cookies, wrapperBase,
-                                        getBaseUrl(targetUrl), getDefaultHeaders(wrapperUrl));
+                                result[0] = new StreamResult(url, cookies,
+                                        getBaseUrl(targetUrl), getBaseUrl(targetUrl),
+                                        getDefaultHeaders(targetUrl));
                                 Log.d(TAG, "🎯 [injection] Stream por JS: " + url);
                                 mainHandler.post(() -> {
                                     destroyWebView(webView, destroyed, mainHandler);
@@ -454,8 +457,11 @@ private static final long WEBVIEW_TIMEOUT_MS = 20_000;
                                     origin = getBaseUrl(targetUrl);
                                 }
 
-                                result[0] = new StreamResult(reqUrl, cookies, wrapperBase, origin, capturedHeaders);
+                                String referer = refererRealDe(capturedHeaders);
+                                if (referer.isEmpty()) referer = getBaseUrl(targetUrl);
+                                result[0] = new StreamResult(reqUrl, cookies, referer, origin, capturedHeaders);
                                 Log.d(TAG, "🎯 [injection] Stream interceptado: " + reqUrl);
+                                Log.d(TAG, "   🌐 Referer: " + referer + " | Origin: " + origin);
                                 mainHandler.post(() -> {
                                     destroyWebView(webView, destroyed, mainHandler);
                                     latch.countDown();
@@ -589,6 +595,26 @@ private static final long WEBVIEW_TIMEOUT_MS = 20_000;
      * Sigue la cadena de páginas hasta dar con el playlist HLS.
      * Devuelve null si en 25 s o en 5 saltos no aparece nada.
      */
+    /**
+     * El Referer REAL de una peticion: el de su propia cabecera.
+     *
+     * Antes se usaba el del envoltorio (belkaperu.github.io) y eso es un error
+     * grave: al CDN del stream le llegaba "Referer: https://belkaperu.github.io/"
+     * para un video que vive en lunchup.net o deportes.ksdjugfssddeports.com,
+     * y eso lo rechaza o lo sirve mal.
+     */
+    private static String refererRealDe(Map<String, String> headers) {
+        if (headers != null) {
+            for (String k : headers.keySet()) {
+                if (k != null && k.equalsIgnoreCase("Referer")) {
+                    String v = headers.get(k);
+                    if (v != null && !v.trim().isEmpty()) return v.trim();
+                }
+            }
+        }
+        return "";
+    }
+
     static StreamResult resolverEnCadena(String url) {
         return resolverEnCadena(url, 0, new HashSet<String>(), null,
                 System.currentTimeMillis() + TIEMPO_MAX_CADENA_MS);
