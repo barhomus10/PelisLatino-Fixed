@@ -42,6 +42,8 @@ public class StreamResolver {
 // 10 s se cortaban siempre y el canal no salia aunque el WebView estuviera a
 // punto de encontrar el stream.
 private static final long WEBVIEW_TIMEOUT_MS = 20_000;
+    // Tope duro: aunque la pagina siga pidiendo cosas, no se espera mas de 45 s.
+    private static final long WEBVIEW_MAXIMO_MS = 45_000;
     public static final String DESKTOP_USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
@@ -246,6 +248,7 @@ private static final long WEBVIEW_TIMEOUT_MS = 20_000;
                 CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
             }
 
+            final long inicio = System.currentTimeMillis();
             Handler timeout = new Handler(Looper.getMainLooper());
             Runnable timeoutAction = () -> {
                 if (!destroyed.get()) {
@@ -304,6 +307,16 @@ private static final long WEBVIEW_TIMEOUT_MS = 20_000;
                             }
                         }
                     }
+                    // ESPERA INTELIGENTE: mientras la pagina siga pidiendo cosas
+                    // se le da mas tiempo. Clappr (lunchup.net y compania) carga
+                    // 1 MB de JavaScript y descifra una configuracion enorme
+                    // antes de pedir el m3u8, y con un tiempo fijo se cortaba
+                    // siempre justo antes de llegar.
+                    if (!destroyed.get()
+                            && System.currentTimeMillis() - inicio < WEBVIEW_MAXIMO_MS) {
+                        timeout.removeCallbacks(timeoutAction);
+                        timeout.postDelayed(timeoutAction, WEBVIEW_TIMEOUT_MS);
+                    }
                     return super.shouldInterceptRequest(view, request);
                 }
             });
@@ -315,7 +328,7 @@ private static final long WEBVIEW_TIMEOUT_MS = 20_000;
             webView.loadDataWithBaseURL(wrapperBase, html, "text/html", "UTF-8", null);
         });
 
-        try { latch.await(WEBVIEW_TIMEOUT_MS + 1000, TimeUnit.MILLISECONDS); }
+        try { latch.await(WEBVIEW_MAXIMO_MS + 1000, TimeUnit.MILLISECONDS); }
         catch (InterruptedException e) { Thread.currentThread().interrupt(); }
         return result[0];
     }
@@ -375,6 +388,7 @@ private static final long WEBVIEW_TIMEOUT_MS = 20_000;
             }
             webView.addJavascriptInterface(new JsBridge(), "AndroidStreamBridge");
 
+            final long inicio = System.currentTimeMillis();
             Handler timeout = new Handler(Looper.getMainLooper());
             Runnable timeoutAction = () -> {
                 if (!destroyed.get()) {
@@ -425,6 +439,16 @@ private static final long WEBVIEW_TIMEOUT_MS = 20_000;
                             }
                         }
                     }
+                    // ESPERA INTELIGENTE: mientras la pagina siga pidiendo cosas
+                    // se le da mas tiempo. Clappr (lunchup.net y compania) carga
+                    // 1 MB de JavaScript y descifra una configuracion enorme
+                    // antes de pedir el m3u8, y con un tiempo fijo se cortaba
+                    // siempre justo antes de llegar.
+                    if (!destroyed.get()
+                            && System.currentTimeMillis() - inicio < WEBVIEW_MAXIMO_MS) {
+                        timeout.removeCallbacks(timeoutAction);
+                        timeout.postDelayed(timeoutAction, WEBVIEW_TIMEOUT_MS);
+                    }
                     return super.shouldInterceptRequest(view, request);
                 }
 
@@ -453,7 +477,7 @@ private static final long WEBVIEW_TIMEOUT_MS = 20_000;
             webView.loadUrl(targetUrl);
         });
 
-        try { latch.await(WEBVIEW_TIMEOUT_MS + 1000, TimeUnit.MILLISECONDS); }
+        try { latch.await(WEBVIEW_MAXIMO_MS + 1000, TimeUnit.MILLISECONDS); }
         catch (InterruptedException e) { Thread.currentThread().interrupt(); }
         return result[0];
     }
