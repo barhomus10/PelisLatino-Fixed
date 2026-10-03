@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/controls_root"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="#B3000000"
+    android:padding="8dp">
+
+    <!-- Barra de progreso -->
+    <SeekBar
+        android:id="@+id/seekBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:max="1000"
+        android:progressDrawable="@drawable/seekbar_progress"
+        android:thumb="@drawable/seekbar_thumb" />
+
+    <!-- Fila de botones -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <!-- Rewind -->
+        <ImageButton
+            android:id="@+id/btnRewind"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:src="@drawable/ic_rewind"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Retroceder" />
+
+        <!-- Play/Pause -->
+        <ImageButton
+            android:id="@+id/btnPlayPause"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:src="@drawable/ic_play"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Reproducir/Pausar" />
+
+        <!-- Forward -->
+        <ImageButton
+            android:id="@+id/btnForward"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:src="@drawable/ic_forward"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Adelantar" />
+
+        <!-- Espaciador -->
+        <View
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
+
+        <!-- Volumen -->
+        <ImageButton
+            android:id="@+id/btnVolume"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:src="@drawable/ic_volume"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Volumen" />
+
+        <!-- Refrescar stream -->
+        <ImageButton
+            android:id="@+id/btnRefresh"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:src="@drawable/ic_refresh"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Refrescar" />
+
+        <!-- PiP -->
+        <ImageButton
+            android:id="@+id/btnPip"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:src="@drawable/ic_pip"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Picture-in-Picture" />
+
+        <!-- Cerrar el reproductor (para el audio y sale) -->
+        <ImageButton
+            android:id="@+id/btnCerrar"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:src="@drawable/ic_cerrar"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Cerrar" />
+    </LinearLayout>
+</LinearLayout>
