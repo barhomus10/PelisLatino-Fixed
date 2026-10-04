@@ -2,42 +2,187 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:background="@color/pelis_bg"
     android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/pelis_bg_dark"
+        android:orientation="vertical"
+        android:paddingStart="16dp"
+        android:paddingTop="16dp"
+        android:paddingEnd="16dp"
+        android:paddingBottom="12dp">
+
+        <TextView
+            android:id="@+id/txtCatalogoTitulo"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Películas y series"
+            android:textColor="@color/pelis_text"
+            android:textSize="23sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/txtCatalogoDescripcion"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="3dp"
+            android:text="Encuentra tu próxima historia."
+            android:textColor="@color/pelis_muted"
+            android:textSize="13sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:layout_marginTop="14dp"
+            android:background="@drawable/bg_pelis_search"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="12dp"
+            android:paddingEnd="4dp">
+
+            <ImageView
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:contentDescription="Buscar"
+                android:src="@drawable/ic_pelis_search"
+                android:tint="@color/pelis_muted" />
+
+            <EditText
+                android:id="@+id/editBuscarPelis"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_marginStart="9dp"
+                android:layout_weight="1"
+                android:background="@android:color/transparent"
+                android:hint="Buscar películas o series..."
+                android:imeOptions="actionSearch"
+                android:inputType="textCapSentences"
+                android:maxLines="1"
+                android:paddingStart="0dp"
+                android:paddingEnd="0dp"
+                android:singleLine="true"
+                android:textColor="@color/pelis_text"
+                android:textColorHint="@color/pelis_muted"
+                android:textSize="14sp" />
+
+            <ImageButton
+                android:id="@+id/btnLimpiarBusquedaPelis"
+                android:layout_width="36dp"
+                android:layout_height="40dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Borrar búsqueda"
+                android:padding="10dp"
+                android:src="@drawable/ic_pelis_close"
+                android:tint="@color/pelis_muted"
+                android:visibility="gone" />
+
+            <ImageButton
+                android:id="@+id/btnBuscarPelis"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Buscar títulos"
+                android:padding="9dp"
+                android:src="@drawable/ic_pelis_search"
+                android:tint="@color/pelis_text" />
+        </LinearLayout>
+
+        <HorizontalScrollView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:clipToPadding="false"
+            android:fillViewport="false"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/btnTodosPelis"
+                    android:layout_width="wrap_content"
+                    android:layout_height="40dp"
+                    android:background="@drawable/bg_pelis_filter_selected"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center"
+                    android:minWidth="76dp"
+                    android:paddingStart="16dp"
+                    android:paddingEnd="16dp"
+                    android:text="Todo"
+                    android:textColor="@color/pelis_text"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/btnPeliculasPelis"
+                    android:layout_width="wrap_content"
+                    android:layout_height="40dp"
+                    android:layout_marginStart="8dp"
+                    android:background="@drawable/bg_pelis_filter"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center"
+                    android:minWidth="96dp"
+                    android:paddingStart="16dp"
+                    android:paddingEnd="16dp"
+                    android:text="Películas"
+                    android:textColor="@color/pelis_muted"
+                    android:textSize="13sp" />
+
+                <TextView
+                    android:id="@+id/btnSeriesPelis"
+                    android:layout_width="wrap_content"
+                    android:layout_height="40dp"
+                    android:layout_marginStart="8dp"
+                    android:background="@drawable/bg_pelis_filter"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center"
+                    android:minWidth="76dp"
+                    android:paddingStart="16dp"
+                    android:paddingEnd="16dp"
+                    android:text="Series"
+                    android:textColor="@color/pelis_muted"
+                    android:textSize="13sp" />
+            </LinearLayout>
+        </HorizontalScrollView>
+    </LinearLayout>
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:padding="8dp">
+        android:paddingStart="16dp"
+        android:paddingTop="14dp"
+        android:paddingEnd="16dp"
+        android:paddingBottom="8dp">
 
-        <EditText
-            android:id="@+id/editBuscarPelis"
+        <TextView
+            android:id="@+id/txtResultadosPelis"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:hint="Buscar película o serie"
-            android:imeOptions="actionSearch"
-            android:inputType="text"
+            android:ellipsize="end"
             android:maxLines="1"
-            android:textSize="14sp" />
+            android:text="Explorar catálogo"
+            android:textColor="@color/pelis_text"
+            android:textSize="17sp"
+            android:textStyle="bold" />
 
-        <Button
-            android:id="@+id/btnPeliculasPelis"
+        <TextView
+            android:id="@+id/txtConteoPelis"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginStart="6dp"
-            android:minWidth="0dp"
-            android:text="Películas"
-            android:textSize="12sp" />
-
-        <Button
-            android:id="@+id/btnSeriesPelis"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="4dp"
-            android:minWidth="0dp"
-            android:text="Series"
+            android:gravity="end"
+            android:text="Cargando..."
+            android:textColor="@color/pelis_muted"
             android:textSize="12sp" />
     </LinearLayout>
 
@@ -51,21 +196,31 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:clipToPadding="false"
-            android:paddingBottom="8dp" />
+            android:paddingStart="8dp"
+            android:paddingTop="2dp"
+            android:paddingEnd="8dp"
+            android:paddingBottom="12dp"
+            android:scrollbars="none" />
 
         <ProgressBar
             android:id="@+id/progressPelis"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_gravity="center" />
+            android:layout_gravity="center"
+            android:indeterminateTint="@color/pelis_primary" />
 
         <TextView
             android:id="@+id/txtVacioPelis"
-            android:layout_width="wrap_content"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_gravity="center"
-            android:padding="16dp"
-            android:text="Sin resultados"
+            android:gravity="center"
+            android:paddingStart="28dp"
+            android:paddingTop="24dp"
+            android:paddingEnd="28dp"
+            android:paddingBottom="24dp"
+            android:text="No encontramos títulos.\nPrueba con otro nombre."
+            android:textColor="@color/pelis_muted"
             android:textSize="14sp"
             android:visibility="gone" />
     </FrameLayout>
@@ -74,8 +229,9 @@
         android:id="@+id/progressPelisPie"
         style="?android:attr/progressBarStyleHorizontal"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
+        android:layout_height="2dp"
         android:indeterminate="true"
+        android:indeterminateTint="@color/pelis_primary"
         android:visibility="gone" />
 
 </LinearLayout>

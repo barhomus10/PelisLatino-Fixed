@@ -121,14 +121,16 @@ public class PelisDetailActivity extends AppCompatActivity {
     private void pintarCabecera() {
         txtTitulo.setText(item.titulo);
         txtMeta.setText(item.subtitulo());
-        txtTipo.setText(item.esSerie() ? "Serie" : "Película");
+        String tipo = item.esSerie() ? "Serie" : "Película";
+        String generos = item.generosTexto();
+        txtTipo.setText(generos.isEmpty() ? tipo : tipo + " · " + generos);
 
         String fondo = item.backdrop.isEmpty() ? item.poster : item.backdrop;
         Glide.with(this).load(fondo).centerCrop().into(imgBackdrop);
         Glide.with(this)
                 .load(item.poster.isEmpty() ? item.backdrop : item.poster)
-                .placeholder(R.drawable.ic_placeholder)
-                .error(R.drawable.ic_placeholder)
+                .placeholder(R.drawable.bg_pelis_poster_placeholder)
+                .error(R.drawable.bg_pelis_poster_placeholder)
                 .centerCrop()
                 .into(imgPoster);
 

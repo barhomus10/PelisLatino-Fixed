@@ -18,6 +18,9 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.text.Spannable;
+import android.text.SpannableString;
+import android.text.style.ForegroundColorSpan;
 import android.view.MenuItem;
 import android.view.View;
 import android.widget.FrameLayout;
@@ -90,6 +93,15 @@ public class Main extends AppCompatActivity implements NavigationView.OnNavigati
         Toolbar toolbar = findViewById(R.id.toolbar);
 
         setSupportActionBar(toolbar);
+        SpannableString brand = new SpannableString("PelisLatinoHD");
+        brand.setSpan(new ForegroundColorSpan(ContextCompat.getColor(this, R.color.pelis_text)),
+                0, 5, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        brand.setSpan(new ForegroundColorSpan(ContextCompat.getColor(this, R.color.pelis_primary)),
+                5, 11, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        brand.setSpan(new ForegroundColorSpan(ContextCompat.getColor(this, R.color.pelis_text)),
+                11, brand.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        toolbar.setTitle(brand);
+
         ActionBarDrawerToggle toggle = new ActionBarDrawerToggle(
                 this, drawerLayout, toolbar, R.string.navigation_drawer_open, R.string.navigation_drawer_close);
         drawerLayout.addDrawerListener(toggle);

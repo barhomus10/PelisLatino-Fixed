@@ -229,6 +229,13 @@ private static final long WEBVIEW_TIMEOUT_MS = 20_000;
         final Handler mainHandler = new Handler(Looper.getMainLooper());
 
         Log.d(TAG, "🏗️ [iframe] Base URL (wrapper): " + wrapperBase);
+        // La pagina que envuelve al iframe tiene que ser del MISMO ORIGEN que
+        // el propio iframe. Si se usa el origen del envoltorio (belkaperu)
+        // mientras el iframe apunta a otro dominio (tarjetarojita, lunchup...),
+        // el WebView ni siquiera llega a cargarlo: no entraba NI UNA peticion
+        // y saltaba el timeout sin haber intentado nada.
+        final String basePagina = getBaseUrl(targetUrl);
+        Log.d(TAG, "🏗️ [iframe] Origen de la pagina: " + basePagina);
 
         mainHandler.post(() -> {
             WebView webView = new WebView(context);
@@ -240,6 +247,10 @@ private static final long WEBVIEW_TIMEOUT_MS = 20_000;
             settings.setUserAgentString(DESKTOP_USER_AGENT);
             settings.setBlockNetworkImage(true);
             settings.setLoadsImagesAutomatically(false);
+            // La pagina envoltorio se genera en memoria y mete un iframe a un
+            // dominio real: sin estos dos ajustes el WebView la bloquea.
+            settings.setAllowFileAccessFromFileURLs(true);
+            settings.setAllowUniversalAccessFromFileURLs(true);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
             }
@@ -248,11 +259,13 @@ private static final long WEBVIEW_TIMEOUT_MS = 20_000;
                 CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
             }
 
+            final AtomicBoolean primeraPeticion = new AtomicBoolean(false);
             final long inicio = System.currentTimeMillis();
             Handler timeout = new Handler(Looper.getMainLooper());
             Runnable timeoutAction = () -> {
                 if (!destroyed.get()) {
-                    Log.e(TAG, "⏰ Timeout WebView-iframe");
+                    Log.e(TAG, "⏰ Timeout WebView-iframe"
+                            + (primeraPeticion.get() ? "" : " (SIN recibir ni una peticion)"));
                     destroyWebView(webView, destroyed, mainHandler);
                     latch.countDown();
                 }
@@ -296,16 +309,21 @@ private static final long WEBVIEW_TIMEOUT_MS = 20_000;
                                     origin = getBaseUrl(targetUrl);
                                 }
 
-                                result[0] = new StreamResult(url, cookies, wrapperBase, origin, capturedHeaders);
+                                String referer = refererRealDe(capturedHeaders);
+                                if (referer.isEmpty()) referer = getBaseUrl(targetUrl);
+                                result[0] = new StreamResult(url, cookies, referer, origin, capturedHeaders);
                                 Log.d(TAG, "🎯 [iframe] Stream: " + url);
                                 Log.d(TAG, "   🍪 Cookies: " + (cookies.isEmpty() ? "(ninguna)" : cookies));
-                                Log.d(TAG, "   🌐 Referer: " + wrapperBase + " | Origin: " + origin);
+                                Log.d(TAG, "   🌐 Referer: " + referer + " | Origin: " + origin);
                                 mainHandler.post(() -> {
                                     destroyWebView(webView, destroyed, mainHandler);
                                     latch.countDown();
                                 });
                             }
                         }
+                    }
+                    if (primeraPeticion.compareAndSet(false, true)) {
+                        Log.d(TAG, "[iframe] entra la 1ª peticion: " + url);
                     }
                     // ESPERA INTELIGENTE: mientras la pagina siga pidiendo cosas
                     // se le da mas tiempo. Clappr (lunchup.net y compania) carga
@@ -321,11 +339,19 @@ private static final long WEBVIEW_TIMEOUT_MS = 20_000;
                 }
             });
 
+            webView.setWebChromeClient(new android.webkit.WebChromeClient() {
+                @Override
+                public void onProgressChanged(WebView view, int newProgress) {
+                    super.onProgressChanged(view, newProgress);
+                    if (newProgress == 100) Log.d(TAG, "[iframe] pagina cargada al 100%");
+                }
+            });
+
             String html = "<html><body style='margin:0;padding:0;background:black;'>" +
                     "<iframe src='" + targetUrl + "' width='100%' height='100%' " +
                     "frameborder='0' scrolling='no' allowfullscreen allow='autoplay'></iframe>" +
                     "</body></html>";
-            webView.loadDataWithBaseURL(wrapperBase, html, "text/html", "UTF-8", null);
+            webView.loadDataWithBaseURL(basePagina, html, "text/html", "UTF-8", null);
         });
 
         try { latch.await(WEBVIEW_MAXIMO_MS + 1000, TimeUnit.MILLISECONDS); }
@@ -374,8 +400,9 @@ private static final long WEBVIEW_TIMEOUT_MS = 20_000;
                                 String cookies = CookieManager.getInstance().getCookie(url);
                                 if (cookies == null) cookies = "";
                                 // En el bridge JS no tenemos headers, pero podemos usar el origin del target
-                                result[0] = new StreamResult(url, cookies, wrapperBase,
-                                        getBaseUrl(targetUrl), getDefaultHeaders(wrapperUrl));
+                                result[0] = new StreamResult(url, cookies,
+                                        getBaseUrl(targetUrl), getBaseUrl(targetUrl),
+                                        getDefaultHeaders(targetUrl));
                                 Log.d(TAG, "🎯 [injection] Stream por JS: " + url);
                                 mainHandler.post(() -> {
                                     destroyWebView(webView, destroyed, mainHandler);
@@ -430,8 +457,11 @@ private static final long WEBVIEW_TIMEOUT_MS = 20_000;
                                     origin = getBaseUrl(targetUrl);
                                 }
 
-                                result[0] = new StreamResult(reqUrl, cookies, wrapperBase, origin, capturedHeaders);
+                                String referer = refererRealDe(capturedHeaders);
+                                if (referer.isEmpty()) referer = getBaseUrl(targetUrl);
+                                result[0] = new StreamResult(reqUrl, cookies, referer, origin, capturedHeaders);
                                 Log.d(TAG, "🎯 [injection] Stream interceptado: " + reqUrl);
+                                Log.d(TAG, "   🌐 Referer: " + referer + " | Origin: " + origin);
                                 mainHandler.post(() -> {
                                     destroyWebView(webView, destroyed, mainHandler);
                                     latch.countDown();
@@ -565,6 +595,26 @@ private static final long WEBVIEW_TIMEOUT_MS = 20_000;
      * Sigue la cadena de páginas hasta dar con el playlist HLS.
      * Devuelve null si en 25 s o en 5 saltos no aparece nada.
      */
+    /**
+     * El Referer REAL de una peticion: el de su propia cabecera.
+     *
+     * Antes se usaba el del envoltorio (belkaperu.github.io) y eso es un error
+     * grave: al CDN del stream le llegaba "Referer: https://belkaperu.github.io/"
+     * para un video que vive en lunchup.net o deportes.ksdjugfssddeports.com,
+     * y eso lo rechaza o lo sirve mal.
+     */
+    private static String refererRealDe(Map<String, String> headers) {
+        if (headers != null) {
+            for (String k : headers.keySet()) {
+                if (k != null && k.equalsIgnoreCase("Referer")) {
+                    String v = headers.get(k);
+                    if (v != null && !v.trim().isEmpty()) return v.trim();
+                }
+            }
+        }
+        return "";
+    }
+
     static StreamResult resolverEnCadena(String url) {
         return resolverEnCadena(url, 0, new HashSet<String>(), null,
                 System.currentTimeMillis() + TIEMPO_MAX_CADENA_MS);

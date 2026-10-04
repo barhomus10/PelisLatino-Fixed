@@ -1,6 +1,7 @@
 package dza.folbol.BLABONGO;
 
 import android.content.Context;
+import android.text.TextUtils;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -14,8 +15,9 @@ import com.bumptech.glide.Glide;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
-/** Cuadrícula de pósters del catálogo. */
+/** Cuadrícula de pósters estilo catálogo PelisLatinoHD. */
 public class PelisAdapter extends RecyclerView.Adapter<PelisAdapter.ItemViewHolder> {
 
     public interface OnItemClick {
@@ -59,14 +61,48 @@ public class PelisAdapter extends RecyclerView.Adapter<PelisAdapter.ItemViewHold
     public void onBindViewHolder(@NonNull ItemViewHolder h, int position) {
         PelisItem item = items.get(position);
         h.txtTitulo.setText(item.titulo);
-        h.txtSubtitulo.setText(item.subtitulo());
+        h.imgPoster.setContentDescription("Póster de " + item.titulo);
 
-        Glide.with(context)
-                .load(item.poster.isEmpty() ? item.backdrop : item.poster)
-                .placeholder(R.drawable.ic_placeholder)
-                .error(R.drawable.ic_placeholder)
+        String generos = item.generosTexto();
+        h.txtSubtitulo.setText(generos);
+        h.txtSubtitulo.setVisibility(TextUtils.isEmpty(generos) ? View.GONE : View.VISIBLE);
+
+        if (item.rating > 0) {
+            h.txtRating.setText(String.format(Locale.US, "★ %.1f", item.rating));
+            h.txtRating.setVisibility(View.VISIBLE);
+        } else {
+            h.txtRating.setVisibility(View.GONE);
+        }
+
+        if (!TextUtils.isEmpty(item.anio)) {
+            h.txtAnio.setText(item.anio);
+            h.txtAnio.setVisibility(View.VISIBLE);
+        } else {
+            h.txtAnio.setVisibility(View.GONE);
+        }
+
+        h.txtTipo.setText(item.esSerie() ? "SERIE" : "HD");
+
+        String poster = !TextUtils.isEmpty(item.poster) ? item.poster : item.backdrop;
+        Glide.with(h.imgPoster)
+                .load(poster)
+                .placeholder(R.drawable.bg_pelis_poster_placeholder)
+                .error(R.drawable.bg_pelis_poster_placeholder)
                 .centerCrop()
                 .into(h.imgPoster);
+
+        // Mantiene la proporción 2:3 de los pósteres en cualquier ancho de columna.
+        h.imgPoster.post(() -> {
+            if (h.getBindingAdapterPosition() == RecyclerView.NO_POSITION) return;
+            int width = h.imgPoster.getWidth();
+            if (width <= 0) return;
+            int height = Math.round(width * 1.5f);
+            ViewGroup.LayoutParams params = h.imgPoster.getLayoutParams();
+            if (params.height != height) {
+                params.height = height;
+                h.imgPoster.setLayoutParams(params);
+            }
+        });
 
         h.itemView.setOnClickListener(v -> {
             if (listener != null) listener.onClick(item);
@@ -82,12 +118,18 @@ public class PelisAdapter extends RecyclerView.Adapter<PelisAdapter.ItemViewHold
         final ImageView imgPoster;
         final TextView txtTitulo;
         final TextView txtSubtitulo;
+        final TextView txtRating;
+        final TextView txtTipo;
+        final TextView txtAnio;
 
         public ItemViewHolder(@NonNull View itemView) {
             super(itemView);
             imgPoster = itemView.findViewById(R.id.imgPelisPoster);
             txtTitulo = itemView.findViewById(R.id.txtPelisTitulo);
             txtSubtitulo = itemView.findViewById(R.id.txtPelisSubtitulo);
+            txtRating = itemView.findViewById(R.id.txtPelisRating);
+            txtTipo = itemView.findViewById(R.id.txtPelisTipo);
+            txtAnio = itemView.findViewById(R.id.txtPelisAnio);
         }
     }
 }

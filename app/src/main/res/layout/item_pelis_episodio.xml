@@ -13,7 +13,7 @@
         android:id="@+id/txtEpisodioNumero"
         android:layout_width="64dp"
         android:layout_height="wrap_content"
-        android:textColor="#8AA000"
+        android:textColor="@color/pelis_primary"
         android:textSize="13sp"
         android:textStyle="bold" />
 

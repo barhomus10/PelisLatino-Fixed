@@ -669,6 +669,7 @@ public class PlayerActivity extends AppCompatActivity {
         return PendingIntent.getBroadcast(this, accion, i, flags);
     }
 
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
     private void registerPipReceiver() {
         pipReceiver = new BroadcastReceiver() {
             @Override

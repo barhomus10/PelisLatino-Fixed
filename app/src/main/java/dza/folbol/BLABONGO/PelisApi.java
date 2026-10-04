@@ -12,6 +12,7 @@ import com.google.gson.JsonParser;
 
 import java.io.IOException;
 import java.net.URL;
+import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -65,8 +66,8 @@ public final class PelisApi {
     /** Prefijo de imagenes TMDB (por si llega una ruta relativa). */
     public static final String IMG = "https://image.tmdb.org/t/p/w500";
 
-    /** Tamano de pagina que consume la UI (PelisFragment). */
-    public static final int POR_PAGINA = 20;
+    /** Número de tarjetas por página, como en el grid de la web de referencia. */
+    public static final int POR_PAGINA = 28;
 
     public static final String UA =
             "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) " +
@@ -109,6 +110,17 @@ public final class PelisApi {
         void onError(String mensaje);
     }
 
+    /** Una página de resultados con el total exacto para la cabecera de búsqueda. */
+    public static final class PaginaCatalogo {
+        public final List<PelisItem> items;
+        public final int total;
+
+        private PaginaCatalogo(List<PelisItem> items, int total) {
+            this.items = items;
+            this.total = total;
+        }
+    }
+
     private static <T> void enMain(Callback<T> cb, T data) {
         if (MAIN != null) MAIN.post(() -> cb.onOk(data));
         else cb.onOk(data);
@@ -123,8 +135,22 @@ public final class PelisApi {
      * API publica                                                     *
      * --------------------------------------------------------------- */
 
+    /** API compatible con llamadas que solo necesitan la lista de la página. */
     public static void catalogo(String tipo, int pagina, String busqueda,
                                 Callback<List<PelisItem>> cb) {
+        new Thread(() -> {
+            try {
+                enMain(cb, lista(tipo, pagina, busqueda).items);
+            } catch (Exception e) {
+                Log.e(TAG, "catalogo", e);
+                error(cb, describir(e));
+            }
+        }, "PelisApi-catalogo").start();
+    }
+
+    /** Página más el total de coincidencias para mostrar resultados exactos. */
+    public static void catalogoPagina(String tipo, int pagina, String busqueda,
+                                      Callback<PaginaCatalogo> cb) {
         new Thread(() -> {
             try {
                 enMain(cb, lista(tipo, pagina, busqueda));
@@ -132,7 +158,7 @@ public final class PelisApi {
                 Log.e(TAG, "catalogo", e);
                 error(cb, describir(e));
             }
-        }, "PelisApi-catalogo").start();
+        }, "PelisApi-catalogo-pagina").start();
     }
 
     public static void detalle(PelisItem base, Callback<PelisItem> cb) {
@@ -211,33 +237,58 @@ public final class PelisApi {
         }
     }
 
-    private static List<PelisItem> lista(String tipo, int pagina, String busqueda)
+    private static PaginaCatalogo lista(String tipo, int pagina, String busqueda)
             throws IOException {
         JsonObject root = catalogoJson();
-
+        String q = normalizarBusqueda(busqueda);
+        boolean todas = PelisItem.TIPO_TODOS.equalsIgnoreCase(tipo);
         boolean serie = PelisItem.TIPO_SERIE.equalsIgnoreCase(tipo);
-        JsonArray origen = array(root, serie ? "series" : "movies");
-
-        String q = busqueda == null ? "" : busqueda.trim().toLowerCase(Locale.US);
 
         List<PelisItem> filtrado = new ArrayList<>();
-        for (JsonElement el : origen) {
-            if (!el.isJsonObject()) continue;
-            PelisItem it = parseItem(el.getAsJsonObject(), tipo);
-            if (it == null) continue;
-            if (!q.isEmpty() && !it.titulo.toLowerCase(Locale.US).contains(q)) continue;
-            filtrado.add(it);
+        if (todas) {
+            agregarCoincidencias(array(root, "movies"), PelisItem.TIPO_PELICULA, root, q, filtrado);
+            agregarCoincidencias(array(root, "series"), PelisItem.TIPO_SERIE, root, q, filtrado);
+        } else {
+            JsonArray origen = array(root, serie ? "series" : "movies");
+            agregarCoincidencias(origen, tipo, root, q, filtrado);
         }
 
-        // Orden estable por titulo para que la paginacion sea coherente.
-        Collections.sort(filtrado, (a, b) ->
-                a.titulo.compareToIgnoreCase(b.titulo));
-
+        // Mantiene el orden del catálogo fuente, igual que la búsqueda de la web.
+        int total = filtrado.size();
         int page = Math.max(1, pagina);
         int desde = (page - 1) * POR_PAGINA;
-        if (desde >= filtrado.size()) return new ArrayList<>();
-        int hasta = Math.min(desde + POR_PAGINA, filtrado.size());
-        return new ArrayList<>(filtrado.subList(desde, hasta));
+        if (desde >= total) return new PaginaCatalogo(new ArrayList<>(), total);
+        int hasta = Math.min(desde + POR_PAGINA, total);
+        return new PaginaCatalogo(new ArrayList<>(filtrado.subList(desde, hasta)), total);
+    }
+
+    private static void agregarCoincidencias(JsonArray origen, String tipoPorDefecto,
+                                              JsonObject root, String consulta,
+                                              List<PelisItem> destino) {
+        for (JsonElement el : origen) {
+            if (!el.isJsonObject()) continue;
+            JsonObject objeto = el.getAsJsonObject();
+            if (!TextUtils.isEmpty(consulta) && !coincideBusqueda(objeto, consulta)) continue;
+            PelisItem it = parseItem(objeto, tipoPorDefecto, root, false);
+            if (it != null) destino.add(it);
+        }
+    }
+
+    private static boolean coincideBusqueda(JsonObject item, String consulta) {
+        String titulo = primero(item, "title", "titulo", "name");
+        String original = primero(item, "originalTitle", "original_title", "originalName", "original_name");
+        String slug = primero(item, "slug", "permalink", "url");
+        return normalizarBusqueda(titulo).contains(consulta)
+                || normalizarBusqueda(original).contains(consulta)
+                || normalizarBusqueda(slug).contains(consulta);
+    }
+
+    /** Comparación sin mayúsculas ni tildes: "accion" también encuentra "Acción". */
+    private static String normalizarBusqueda(String valor) {
+        if (valor == null || valor.trim().isEmpty()) return "";
+        String normalizado = Normalizer.normalize(valor.trim(), Normalizer.Form.NFD)
+                .replaceAll("\\p{M}+", "");
+        return normalizado.toLowerCase(Locale.ROOT);
     }
 
     private static PelisItem detalle(PelisItem base) throws IOException {
@@ -250,11 +301,8 @@ public final class PelisApi {
                 if (!el.isJsonObject()) continue;
                 JsonObject o = el.getAsJsonObject();
                 if (coincide(o, base)) {
-                    PelisItem it = parseItem(o, base.tipo);
-                    if (it != null) {
-                        it.episodios = parseEpisodios(o);
-                        return it;
-                    }
+                    PelisItem it = parseItem(o, base.tipo, root, true);
+                    if (it != null) return it;
                 }
             }
         }
@@ -297,7 +345,8 @@ public final class PelisApi {
         return base.id > 0 && base.id == oid;
     }
 
-    private static PelisItem parseItem(JsonObject o, String tipoPorDefecto) {
+    private static PelisItem parseItem(JsonObject o, String tipoPorDefecto,
+                                       JsonObject catalogo, boolean incluirEpisodios) {
         if (o == null) return null;
         PelisItem it = new PelisItem();
 
@@ -307,6 +356,7 @@ public final class PelisApi {
         it.titulo = primero(o, "title", "titulo", "name", "originalTitle", "original_title");
         if (TextUtils.isEmpty(it.titulo)) return null;
 
+        it.tituloOriginal = primero(o, "originalTitle", "original_title", "originalName", "original_name");
         it.id = (int) numero(o, "id");
         it.slug = primero(o, "slug", "permalink", "url");
         it.poster = imagen(primero(o, "poster", "poster_path", "image", "thumbnail"));
@@ -316,8 +366,36 @@ public final class PelisApi {
         it.rating = numero(o, "rating", "tmdbRating", "vote_average", "imdb_rating");
         it.playId = primero(o, "embeddedId", "imdb_id", "imdb", "playId", "tmdb_id", "tmdb");
         it.temporadas = (int) numero(o, "seasons", "temporadas", "total_seasons");
-        it.episodios = parseEpisodios(o);
+        it.generos = parseGeneros(o, catalogo);
+        if (incluirEpisodios) it.episodios = parseEpisodios(o);
         return it;
+    }
+
+    private static List<String> parseGeneros(JsonObject item, JsonObject catalogo) {
+        List<String> nombres = new ArrayList<>();
+        JsonArray ids = array(item, "genres", "genre_ids", "generos");
+        JsonObject mapa = catalogo != null && catalogo.has("genres")
+                && catalogo.get("genres").isJsonObject()
+                ? catalogo.getAsJsonObject("genres") : new JsonObject();
+
+        for (JsonElement elemento : ids) {
+            if (elemento == null || elemento.isJsonNull()) continue;
+            String valor;
+            try {
+                valor = elemento.getAsString();
+            } catch (Exception ignored) {
+                continue;
+            }
+            String nombre = "";
+            if (mapa.has(valor) && !mapa.get(valor).isJsonNull()) {
+                try { nombre = mapa.get(valor).getAsString(); } catch (Exception ignored) { }
+            } else if (!valor.matches("\\d+")) {
+                // Algunos espejos ya envían el nombre del género en lugar de su ID.
+                nombre = valor;
+            }
+            if (!TextUtils.isEmpty(nombre) && !nombres.contains(nombre)) nombres.add(nombre);
+        }
+        return nombres;
     }
 
     private static List<PelisItem.Episodio> parseEpisodios(JsonObject o) {

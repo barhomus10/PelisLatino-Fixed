@@ -7,4 +7,18 @@
     <color name="teal_700">#FF018786</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+
+    <!-- Paleta PelisLatinoHD (tomada de la referencia web) -->
+    <color name="pelis_bg">#242424</color>
+    <color name="pelis_bg_dark">#141414</color>
+    <color name="pelis_surface">#1B1B1B</color>
+    <color name="pelis_card">#2B2B2B</color>
+    <color name="pelis_border">#3A3A3A</color>
+    <color name="pelis_primary">#005199</color>
+    <color name="pelis_primary_dark">#003B70</color>
+    <color name="pelis_red">#CD2026</color>
+    <color name="pelis_red_dark">#A6171D</color>
+    <color name="pelis_text">#FFFFFF</color>
+    <color name="pelis_muted">#9CA3AF</color>
+    <color name="pelis_gold">#FFFFD700</color>
 </resources>
