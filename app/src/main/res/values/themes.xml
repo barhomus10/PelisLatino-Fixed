@@ -9,4 +9,10 @@
         <item name="colorOnSecondary">@color/pelis_text</item>
         <item name="android:statusBarColor">?attr/colorPrimaryVariant</item>
     </style>
+
+    <style name="ThemeOverlay.PelisLatino.AlertDialog" parent="ThemeOverlay.MaterialComponents.MaterialAlertDialog">
+        <item name="colorPrimary">@color/pelis_primary</item>
+        <item name="colorSurface">@color/pelis_surface</item>
+        <item name="colorOnSurface">@color/pelis_text</item>
+    </style>
 </resources>

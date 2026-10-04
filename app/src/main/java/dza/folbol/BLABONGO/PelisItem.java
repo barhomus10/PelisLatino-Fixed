@@ -26,6 +26,7 @@ public class PelisItem implements Serializable {
     public String backdrop = "";
     public String sinopsis = "";
     public String anio = "";
+    public String fechaCatalogo = "";
     public double rating = 0;
     public String playId = "";     // imdb "tt..." en películas, id TMDB en series
     public int temporadas = 0;

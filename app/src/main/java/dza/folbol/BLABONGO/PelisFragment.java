@@ -27,7 +27,11 @@ import androidx.fragment.app.Fragment;
 import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
+
 import java.text.NumberFormat;
+import java.util.Collections;
+import java.util.List;
 import java.util.Locale;
 
 /** Catálogo de películas y series con búsqueda y paginación incremental. */
@@ -41,6 +45,7 @@ public class PelisFragment extends Fragment {
     private EditText editBuscar;
     private ImageButton btnBuscar, btnLimpiar;
     private TextView btnTodos, btnPeliculas, btnSeries;
+    private TextView btnFiltroGenero, btnFiltroPais, btnLimpiarFiltros;
     private TextView txtResultados, txtConteo, txtVacio;
     private RecyclerView recycler;
     private ProgressBar progress, progressPie;
@@ -50,8 +55,14 @@ public class PelisFragment extends Fragment {
     private TextWatcher searchWatcher;
     private Runnable pendingSearch;
 
+    private List<PelisApi.OpcionFiltro> opcionesGenero = Collections.emptyList();
+    private List<PelisApi.OpcionFiltro> opcionesPais = Collections.emptyList();
     private String tipoActual = PelisItem.TIPO_TODOS;
     private String busqueda = "";
+    private String nombreGenero = "";
+    private String nombrePais = "";
+    private int generoSeleccionado = 0;
+    private int paisSeleccionado = 0;
     private int pagina = 1;
     private int totalResultados = 0;
     private long requestId = 0;
@@ -71,6 +82,9 @@ public class PelisFragment extends Fragment {
         btnTodos = view.findViewById(R.id.btnTodosPelis);
         btnPeliculas = view.findViewById(R.id.btnPeliculasPelis);
         btnSeries = view.findViewById(R.id.btnSeriesPelis);
+        btnFiltroGenero = view.findViewById(R.id.btnFiltroGeneroPelis);
+        btnFiltroPais = view.findViewById(R.id.btnFiltroPaisPelis);
+        btnLimpiarFiltros = view.findViewById(R.id.btnLimpiarFiltrosPelis);
         txtResultados = view.findViewById(R.id.txtResultadosPelis);
         txtConteo = view.findViewById(R.id.txtConteoPelis);
         recycler = view.findViewById(R.id.recyclerPelis);
@@ -97,6 +111,9 @@ public class PelisFragment extends Fragment {
         btnTodos.setOnClickListener(v -> cambiarTipo(PelisItem.TIPO_TODOS));
         btnPeliculas.setOnClickListener(v -> cambiarTipo(PelisItem.TIPO_PELICULA));
         btnSeries.setOnClickListener(v -> cambiarTipo(PelisItem.TIPO_SERIE));
+        btnFiltroGenero.setOnClickListener(v -> mostrarSelectorGenero());
+        btnFiltroPais.setOnClickListener(v -> mostrarSelectorPais());
+        btnLimpiarFiltros.setOnClickListener(v -> limpiarFiltros());
         btnBuscar.setOnClickListener(v -> buscar(editBuscar.getText().toString()));
         btnLimpiar.setOnClickListener(v -> editBuscar.setText(""));
 
@@ -125,6 +142,7 @@ public class PelisFragment extends Fragment {
         pintarFiltros();
         actualizarCabecera();
         cargar(true);
+        cargarFiltros();
         return view;
     }
 
@@ -157,6 +175,7 @@ public class PelisFragment extends Fragment {
         pintarFiltro(btnTodos, PelisItem.TIPO_TODOS.equals(tipoActual));
         pintarFiltro(btnPeliculas, PelisItem.TIPO_PELICULA.equals(tipoActual));
         pintarFiltro(btnSeries, PelisItem.TIPO_SERIE.equals(tipoActual));
+        pintarSelectores();
     }
 
     private void pintarFiltro(TextView button, boolean seleccionado) {
@@ -168,6 +187,126 @@ public class PelisFragment extends Fragment {
                 seleccionado ? R.color.pelis_text : R.color.pelis_muted, requireContext().getTheme()));
         button.setTypeface(android.graphics.Typeface.DEFAULT,
                 seleccionado ? android.graphics.Typeface.BOLD : android.graphics.Typeface.NORMAL);
+    }
+
+    private void pintarSelectores() {
+        if (btnFiltroGenero == null || btnFiltroPais == null) return;
+        String genero = generoSeleccionado == 0 ? "Género"
+                : "Género: " + (nombreGenero.isEmpty() ? "Seleccionado" : nombreGenero);
+        String pais = paisSeleccionado == 0 ? "País"
+                : "País: " + (nombrePais.isEmpty() ? "Seleccionado" : nombrePais);
+        btnFiltroGenero.setText(genero + "  ▾");
+        btnFiltroPais.setText(pais + "  ▾");
+        pintarFiltro(btnFiltroGenero, generoSeleccionado > 0);
+        pintarFiltro(btnFiltroPais, paisSeleccionado > 0);
+        if (btnLimpiarFiltros != null) {
+            btnLimpiarFiltros.setVisibility(generoSeleccionado > 0 || paisSeleccionado > 0
+                    ? View.VISIBLE : View.GONE);
+        }
+    }
+
+    private void cargarFiltros() {
+        PelisApi.filtrosCatalogo(new PelisApi.Callback<PelisApi.FiltrosCatalogo>() {
+            @Override
+            public void onOk(PelisApi.FiltrosCatalogo data) {
+                if (!isAdded() || recycler == null || data == null) return;
+                opcionesGenero = data.generos != null ? data.generos : Collections.emptyList();
+                opcionesPais = data.paises != null ? data.paises : Collections.emptyList();
+                nombreGenero = nombreOpcion(opcionesGenero, generoSeleccionado);
+                nombrePais = nombreVisiblePais(nombreOpcion(opcionesPais, paisSeleccionado));
+                pintarSelectores();
+                actualizarCabecera();
+            }
+
+            @Override
+            public void onError(String mensaje) {
+                Log.w(TAG, "No se pudieron cargar géneros y países: " + mensaje);
+            }
+        });
+    }
+
+    private String nombreOpcion(List<PelisApi.OpcionFiltro> opciones, int id) {
+        if (id <= 0 || opciones == null) return "";
+        for (PelisApi.OpcionFiltro opcion : opciones) {
+            if (opcion.id == id) return opcion.nombre;
+        }
+        return "";
+    }
+
+    private String nombreVisiblePais(String nombre) {
+        return "United States of America".equals(nombre) ? "United States" : nombre;
+    }
+
+    private interface OnFiltroElegido {
+        void elegir(@Nullable PelisApi.OpcionFiltro opcion);
+    }
+
+    private void mostrarSelectorGenero() {
+        mostrarSelector("Género", "Todos los géneros", opcionesGenero,
+                generoSeleccionado, opcion -> {
+                    int nuevoId = opcion == null ? 0 : opcion.id;
+                    if (nuevoId == generoSeleccionado) return;
+                    generoSeleccionado = nuevoId;
+                    nombreGenero = opcion == null ? "" : opcion.nombre;
+                    actualizarFiltrosYRecargar();
+                });
+    }
+
+    private void mostrarSelectorPais() {
+        mostrarSelector("País", "Todos los países", opcionesPais,
+                paisSeleccionado, opcion -> {
+                    int nuevoId = opcion == null ? 0 : opcion.id;
+                    if (nuevoId == paisSeleccionado) return;
+                    paisSeleccionado = nuevoId;
+                    nombrePais = opcion == null ? "" : nombreVisiblePais(opcion.nombre);
+                    actualizarFiltrosYRecargar();
+                });
+    }
+
+    private void mostrarSelector(String titulo, String todosLabel,
+                                 List<PelisApi.OpcionFiltro> opciones, int seleccionado,
+                                 OnFiltroElegido callback) {
+        if (opciones == null || opciones.isEmpty()) {
+            Toast.makeText(requireContext(), "La lista de filtros aún no está disponible.",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        CharSequence[] etiquetas = new CharSequence[opciones.size() + 1];
+        etiquetas[0] = todosLabel;
+        int checked = seleccionado == 0 ? 0 : -1;
+        for (int i = 0; i < opciones.size(); i++) {
+            PelisApi.OpcionFiltro opcion = opciones.get(i);
+            String nombre = "País".equals(titulo) ? nombreVisiblePais(opcion.nombre) : opcion.nombre;
+            etiquetas[i + 1] = nombre;
+            if (opcion.id == seleccionado) checked = i + 1;
+        }
+
+        new MaterialAlertDialogBuilder(requireContext(),
+                R.style.ThemeOverlay_PelisLatino_AlertDialog)
+                .setTitle("Seleccionar " + titulo.toLowerCase(Locale.ROOT))
+                .setSingleChoiceItems(etiquetas, checked, (dialog, which) -> {
+                    dialog.dismiss();
+                    callback.elegir(which == 0 ? null : opciones.get(which - 1));
+                })
+                .setNegativeButton("Cerrar", null)
+                .show();
+    }
+
+    private void actualizarFiltrosYRecargar() {
+        pintarSelectores();
+        pagina = 1;
+        if (recycler != null) recycler.scrollToPosition(0);
+        cargar(true);
+    }
+
+    private void limpiarFiltros() {
+        if (generoSeleccionado == 0 && paisSeleccionado == 0) return;
+        generoSeleccionado = 0;
+        paisSeleccionado = 0;
+        nombreGenero = "";
+        nombrePais = "";
+        actualizarFiltrosYRecargar();
     }
 
     private void programarBusqueda(String texto) {
@@ -217,6 +356,16 @@ public class PelisFragment extends Fragment {
 
         if (!busqueda.isEmpty()) {
             txtResultados.setText("Resultados para “" + busqueda + "”");
+        } else if (generoSeleccionado > 0 || paisSeleccionado > 0) {
+            StringBuilder titulo = new StringBuilder();
+            if (generoSeleccionado > 0) {
+                titulo.append("Género: ").append(nombreGenero.isEmpty() ? "Seleccionado" : nombreGenero);
+            }
+            if (paisSeleccionado > 0) {
+                if (titulo.length() > 0) titulo.append(" · ");
+                titulo.append("País: ").append(nombrePais.isEmpty() ? "Seleccionado" : nombrePais);
+            }
+            txtResultados.setText(titulo.toString());
         } else if (PelisItem.TIPO_PELICULA.equals(tipoActual)) {
             txtResultados.setText("Películas recientes");
         } else if (PelisItem.TIPO_SERIE.equals(tipoActual)) {
@@ -256,6 +405,7 @@ public class PelisFragment extends Fragment {
         final int paginaSolicitada = pagina;
         final long solicitud = ++requestId;
         PelisApi.catalogoPagina(tipoActual, paginaSolicitada, busqueda,
+                generoSeleccionado, paisSeleccionado,
                 new PelisApi.Callback<PelisApi.PaginaCatalogo>() {
                     @Override
                     public void onOk(PelisApi.PaginaCatalogo data) {
@@ -274,9 +424,14 @@ public class PelisFragment extends Fragment {
                         if (data.items.isEmpty()) {
                             hayMas = false;
                             if (adapter.total() == 0) {
-                                txtVacio.setText(busqueda.isEmpty()
-                                        ? "No hay contenido disponible por ahora."
-                                        : "Sin resultados para “" + busqueda + "”.\nPrueba con otro título.");
+                                if (!busqueda.isEmpty()) {
+                                    txtVacio.setText("Sin resultados para “" + busqueda
+                                            + "”.\nPrueba con otro título.");
+                                } else if (generoSeleccionado > 0 || paisSeleccionado > 0) {
+                                    txtVacio.setText("No encontramos títulos con esos filtros.\nPrueba otra combinación.");
+                                } else {
+                                    txtVacio.setText("No hay contenido disponible por ahora.");
+                                }
                                 txtVacio.setVisibility(View.VISIBLE);
                             }
                             actualizarCabecera();
@@ -340,6 +495,9 @@ public class PelisFragment extends Fragment {
         btnTodos = null;
         btnPeliculas = null;
         btnSeries = null;
+        btnFiltroGenero = null;
+        btnFiltroPais = null;
+        btnLimpiarFiltros = null;
         txtResultados = null;
         txtConteo = null;
         txtVacio = null;

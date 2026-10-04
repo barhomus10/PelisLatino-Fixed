@@ -1,7 +1,5 @@
 package dza.folbol.BLABONGO;
 
-import static android.content.ContentValues.TAG;
-
 import android.annotation.SuppressLint;
 import android.app.PendingIntent;
 import android.app.PictureInPictureParams;
@@ -669,7 +667,6 @@ public class PlayerActivity extends AppCompatActivity {
         return PendingIntent.getBroadcast(this, accion, i, flags);
     }
 
-    @SuppressLint("UnspecifiedRegisterReceiverFlag")
     private void registerPipReceiver() {
         pipReceiver = new BroadcastReceiver() {
             @Override

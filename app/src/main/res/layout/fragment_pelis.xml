@@ -152,6 +152,67 @@
                     android:textSize="13sp" />
             </LinearLayout>
         </HorizontalScrollView>
+
+        <HorizontalScrollView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:clipToPadding="false"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/btnFiltroGeneroPelis"
+                    android:layout_width="wrap_content"
+                    android:layout_height="40dp"
+                    android:background="@drawable/bg_pelis_filter"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center"
+                    android:minWidth="98dp"
+                    android:paddingStart="14dp"
+                    android:paddingEnd="14dp"
+                    android:text="Género  ▾"
+                    android:textColor="@color/pelis_muted"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/btnFiltroPaisPelis"
+                    android:layout_width="wrap_content"
+                    android:layout_height="40dp"
+                    android:layout_marginStart="8dp"
+                    android:background="@drawable/bg_pelis_filter"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center"
+                    android:minWidth="84dp"
+                    android:paddingStart="14dp"
+                    android:paddingEnd="14dp"
+                    android:text="País  ▾"
+                    android:textColor="@color/pelis_muted"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/btnLimpiarFiltrosPelis"
+                    android:layout_width="wrap_content"
+                    android:layout_height="40dp"
+                    android:layout_marginStart="8dp"
+                    android:background="@drawable/bg_pelis_filter"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center"
+                    android:paddingStart="14dp"
+                    android:paddingEnd="14dp"
+                    android:text="Limpiar"
+                    android:textColor="@color/pelis_red"
+                    android:textSize="12sp"
+                    android:visibility="gone" />
+            </LinearLayout>
+        </HorizontalScrollView>
     </LinearLayout>
 
     <LinearLayout
